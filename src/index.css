@@ -1,0 +1,130 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+:root {
+  /* Default: Modern Cozy Dark Theme (Elegant Slate & Indigo/Violet Glow) */
+  --bg-app: #090b11;
+  --bg-panel: #0e111a;
+  --bg-header: #121624;
+  --bg-input: #161b2d;
+  --border-color: rgba(99, 102, 241, 0.12); /* Subtle indigo border tint */
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #475569;
+  --color-accent: #6366f1; /* Soft Indigo */
+  --color-accent-hover: #4f46e5;
+  --color-accent-text: #ffffff;
+  --canvas-bg: #07090d;
+  --canvas-grid: #131726;
+  --canvas-shadow: rgba(0, 0, 0, 0.5);
+}
+
+:root.light {
+  /* Cozy Minimalist Light Theme (Warm Slate & Indigo) */
+  --bg-app: #f8fafc;
+  --bg-panel: #ffffff;
+  --bg-header: #f1f5f9;
+  --bg-input: #f8fafc;
+  --border-color: #e2e8f0; /* Thin slate border */
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --color-accent: #4f46e5;
+  --color-accent-hover: #3730a3;
+  --color-accent-text: #ffffff;
+  --canvas-bg: #b5b5b5;
+  --canvas-grid: #e2e8f0;
+  --canvas-shadow: rgba(0, 0, 0, 0.05);
+}
+
+@theme {
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+
+  --color-metro-app: var(--bg-app);
+  --color-metro-panel: var(--bg-panel);
+  --color-metro-header: var(--bg-header);
+  --color-metro-input: var(--bg-input);
+  --color-metro-border: var(--border-color);
+  --color-metro-primary: var(--text-primary);
+  --color-metro-secondary: var(--text-secondary);
+  --color-metro-muted: var(--text-muted);
+  --color-metro-accent: var(--color-accent);
+  --color-metro-accent-hover: var(--color-accent-hover);
+  --color-metro-accent-text: var(--color-accent-text);
+  --color-metro-canvas: var(--canvas-bg);
+  --color-metro-grid: var(--canvas-grid);
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom Sleek Scrollbar styling - Comfortable & Minimal */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Modern Rounded comfortable inputs and buttons with smooth hover feedback */
+button, select, input, textarea {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Interactive focus indicators for supreme ergonomics */
+input:focus, select:focus, textarea:focus {
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15) !important;
+}
+
+.metro-button {
+  transition: all 0.18s ease;
+  border-radius: 8px; /* Smooth comfortable corners */
+}
+
+.metro-input {
+  transition: border-color 0.18s ease;
+  border-radius: 8px; /* Smooth comfortable corners */
+}
+
+/* Frameless desktop window drag rules */
+.drag-handle {
+  -webkit-app-region: drag;
+}
+
+.drag-none {
+  -webkit-app-region: no-drag;
+}
+
+
+

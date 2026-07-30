@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UniPRT SDK</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            text-align: center;
+        }
+        h1 {
+            font-size: 48px;
+            color: #004C97;
+            margin-bottom: 10px;
+            margin-right: 5px;
+            text-align: center;
+        }
+        .custom-select {
+            position: relative;
+            width: 293px; /* Set the width of the select box */
+            margin: 0 auto;
+        }
+        .select-selected {
+            background-color: #fff;
+            color: #888; /* Set text color to grey */
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 100%; /* Ensure it fills the width */
+            position: relative;
+            text-align: left;
+            box-sizing: border-box; /* Include padding and border in the width */
+        }
+        .select-selected:after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            right: 10px;
+            transform: translateY(-50%);
+            width: 10px;
+            height: 10px;
+            background-image: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22 fill=%22none%22 stroke=%22%23999%22 stroke-width=%222%22%3E%3Cpath d=%22M2 5l6 6 6-6%22/%3E%3C/svg%3E');
+            background-size: contain;
+            background-repeat: no-repeat;
+        }
+        .select-selected.select-arrow-active:after {
+            transform: translateY(-50%) rotate(180deg); /* Rotate the arrow when active */
+        }
+        .select-items {
+            position: absolute;
+            background-color: #fff;
+            width: 100%; /* Match width of the select box */
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            z-index: 99;
+            display: none;
+            box-sizing: border-box;
+            max-height: 200px;
+            overflow-y: auto;
+            text-align: left;
+        }
+        .select-items div {
+            padding: 10px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            box-sizing: border-box;
+        }
+        .select-items div:hover {
+            background-color: #004C97;
+            color: #fff;
+        }
+        .same-as-selected {
+            background-color: #004C97;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>UniPRT SDK</h1>
+        <div class="custom-select">
+            <div class="select-selected">Select Language</div>
+            <div class="select-items">
+                <div data-value="html_en-US/index.html">English</div>
+                <div data-value="html_zh-CN/index.html">简体中文</div>
+                <div data-value="html_zh-TW/index.html">繁體中文</div>
+                <!--<div data-value="html_de-DE/index.html">Deutsch</div>
+                <div data-value="html_da-DK/index.html">Dansk</div>
+                <div data-value="html_es-ES/index.html">Español</div>
+                <div data-value="html_fi-FI/index.html">Suomi</div>
+                <div data-value="html_fr-FR/index.html">Français</div>
+                <div data-value="html_it-IT/index.html">Italiano</div>
+                <div data-value="html_ja-JP/index.html">日本語</div>
+                <div data-value="html_ko-KR/index.html">한국어</div>
+                <div data-value="html_nl-NL/index.html">Nederlands</div>
+                <div data-value="html_no-NO/index.html">Norsk</div>
+                <div data-value="html_pt-PT/index.html">Português</div>
+                <div data-value="html_sv-SE/index.html">Svenska</div>-->
+            </div>
+        </div>
+    </div>
+	<div style="position: absolute; bottom: 20px; text-align: center; width: 100%;">
+		<a href="ModelList.html" style="text-decoration: underline; color: #004C97; font-size: 18px;">Supported Models</a>
+	</div>
+
+    <script>
+        const selected = document.querySelector('.select-selected');
+        const optionsContainer = document.querySelector('.select-items');
+
+        selected.addEventListener('click', () => {
+            optionsContainer.classList.toggle('select-hide');
+            optionsContainer.style.display = optionsContainer.style.display === 'none' || optionsContainer.style.display === '' ? 'block' : 'none';
+            selected.classList.toggle('select-arrow-active');
+        });
+
+        document.querySelectorAll('.select-items div').forEach(option => {
+            option.addEventListener('click', (e) => {
+                selected.textContent = option.textContent;
+                selected.dataset.value = option.dataset.value;
+
+                document.querySelectorAll('.select-items div').forEach(option => {
+                    option.classList.remove('same-as-selected');
+                });
+                option.classList.add('same-as-selected');
+                optionsContainer.style.display = 'none';
+                selected.classList.remove('select-arrow-active');
+                redirectToLanguage(option.dataset.value);
+            });
+        });
+
+        function redirectToLanguage(value) {
+            if (value) {
+                window.location.href = value;
+            }
+        }
+
+        window.addEventListener('click', (e) => {
+            if (!selected.contains(e.target)) {
+                optionsContainer.style.display = 'none';
+                selected.classList.remove('select-arrow-active');
+            }
+        });
+    </script>
+</body>
+</html>

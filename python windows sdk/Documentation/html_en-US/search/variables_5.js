@@ -1,0 +1,20 @@
+var searchData=
+[
+  ['gicomm_0',['giComm',['../class_comm_s_d_k_1_1_comm_s_d_k.html#ad9efc19351749c3e4a0a39126667130e',1,'CommSDK::CommSDK']]],
+  ['giprintlanguagetyp_1',['giPrintLanguageTyp',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#af715b94680e1398d5d214f97222f0360',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpaztecbarcodetype_2',['gpAztecBarcodeType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#aaa0c1c24dda5e374c5d6a77d98739812',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpbarcode1dtype_3',['gpBarcode1DType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a7cfe362eadeb92a70f72559f8c7bc5c4',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpboxtype_4',['gpBoxType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#ab757d27887ec7961c668b72ddfb4285b',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpcellrect_5',['gpCellRect',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a58606668b0f2e42f252878cb59f59784',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpcellsquare_6',['gpCellSquare',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a94e647026769a5e747c0948ba56a1266',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpdatamatrixbarcodetype_7',['gpDataMatrixBarcodeType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a6348db336712d28846a7186457e539db',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gplabel_8',['gpLabel',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a22d18de54e91721707928262244583ce',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gplinetype_9',['gpLineType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#aee82e94520df4a1d9f211707b514be1b',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpmexicodebarcodetype_10',['gpMexiCodeBarcodeType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a0f1a3675bf86fbaceaa3acae3fb7184c',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gppdf417barcodetype_11',['gpPdf417BarcodeType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a2cceef66d2a4785b2549e82fcd35f4e5',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpprinterresolution_12',['gpPrinterResolution',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a78368898bf4e88bbda43552589e2634b',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpqrbarcodetype_13',['gpQRBarcodeType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a2d1b179508bb90dc96d56ca9d3e7da10',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gprfidwritetype_14',['gpRfidWriteType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#ac999f4960ef7a8bb61dbfd4cd1a659dd',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gpruler_15',['gpRuler',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a919eb9a90c62fc19288e686dfb4f2993',1,'LabelMakerSDK::LabelMakerSDK']]],
+  ['gptexttype_16',['gpTextType',['../class_label_maker_s_d_k_1_1_label_maker_s_d_k.html#a6da3db1cf589b9c4682a0e7b1e7ce894',1,'LabelMakerSDK::LabelMakerSDK']]]
+];

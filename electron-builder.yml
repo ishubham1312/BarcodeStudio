@@ -1,0 +1,48 @@
+appId: com.barcodestudio.app
+productName: Barcode Studio
+directories:
+  output: dist-app
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+extraResources:
+  - from: backend/dist/BarCode Services.exe'
+    to: backend/BarCode Services.exe'
+  - from: backend
+    to: backend
+    filter:
+      - "**/*"
+      - "!build/**/*"
+      - "!dist/**/*"
+      - "!__pycache__/**/*"
+      - "!*.spec"
+      - "!BarCode Services.exe"
+win:
+  target: nsis
+  icon: assets/logo.ico
+  executableName: Barcode Studio
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Barcode Studio
+  uninstallDisplayName: Barcode Studio
+  artifactName: "${productName} Setup ${version}.${ext}"
+  installerHeaderIcon: assets/logo.ico
+  installerIcon: assets/logo.ico
+  uninstallerIcon: assets/uninstall.ico
+  installerSidebar: assets/installer.bmp
+  uninstallerSidebar: assets/unistaller.bmp
+fileAssociations:
+  - ext: bcs
+    name: Barcode Studio Layout Template
+    description: Barcode Studio Layout File
+    role: Editor
+    icon: assets/extension.ico
+  - ext: bcsc
+    name: Barcode Studio Configuration
+    description: Barcode Studio Config Backup File
+    role: Editor
+    icon: assets/config.ico
