@@ -744,6 +744,7 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
       wrap_text = el.get("wrapText", False)
       auto_shrink = el.get("autoShrink", False)
       smart_fit = el.get("smartFit", False)
+      auto_expand = el.get("autoExpand", False) or el.get("auto_expand", False)
       
       # Wrap text helper function — handles both space-separated (Latin) and
       # character-level (Indic/CJK/Arabic) scripts
@@ -758,264 +759,180 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
 
         is_cjk_no_spaces = any(
           (0x4E00 <= ord(c) <= 0x9FFF) or
+          (0x3400 <= ord(c) <= 0x4DBF) or
+          (0x20000 <= ord(c) <= 0x2A6DF) or
           (0x3040 <= ord(c) <= 0x30FF) or
           (0xAC00 <= ord(c) <= 0xD7AF)
           for c in txt
         )
 
-        wrapped_lines = []
-        paragraphs = txt.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-
-        for para in paragraphs:
-          if not para.strip():
-            wrapped_lines.append("")
-            continue
-
-          if is_cjk_no_spaces:
-            curr_line = ""
-            for char in para:
-              test = curr_line + char
-              if _measure(test) <= max_w:
-                curr_line = test
-              else:
-                if curr_line:
-                  wrapped_lines.append(curr_line)
-                curr_line = char
-            if curr_line:
-              wrapped_lines.append(curr_line)
-          else:
+        if not is_cjk_no_spaces and " " in txt:
+          paragraphs = txt.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+          lines = []
+          for para in paragraphs:
+            if not para:
+              lines.append("")
+              continue
             words = para.split(" ")
-            curr_line_words: list = []
+            curr_line_words = []
             for word in words:
               test_line = " ".join(curr_line_words + [word]) if curr_line_words else word
               if _measure(test_line) <= max_w:
                 curr_line_words.append(word)
               else:
                 if curr_line_words:
-                  wrapped_lines.append(" ".join(curr_line_words))
+                  lines.append(" ".join(curr_line_words))
                   curr_line_words = []
-
                 if _measure(word) > max_w:
                   part = ""
-                  for char in word:
-                    if _measure(part + char) <= max_w:
-                      part += char
+                  for ch in word:
+                    if _measure(part + ch) <= max_w:
+                      part += ch
                     else:
-                      if part:
-                        wrapped_lines.append(part)
-                      part = char
-                  if part:
-                    curr_line_words = [part]
+                      if part: lines.append(part)
+                      part = ch
+                  if part: curr_line_words = [part]
                 else:
                   curr_line_words = [word]
             if curr_line_words:
-              wrapped_lines.append(" ".join(curr_line_words))
+              lines.append(" ".join(curr_line_words))
+          return lines if lines else [txt]
+        else:
+          lines = []
+          curr = ""
+          for char in txt:
+            if char == "\n":
+              lines.append(curr)
+              curr = ""
+              continue
+            if _measure(curr + char) <= max_w:
+              curr += char
+            else:
+              if curr:
+                lines.append(curr)
+              curr = char
+          if curr:
+            lines.append(curr)
+          return lines if lines else [txt]
 
-        return wrapped_lines if wrapped_lines else [txt]
+      is_indic_text = any((0x0900 <= ord(c) <= 0x0D7F) or (0x0600 <= ord(c) <= 0x06FF) for c in (text or ""))
+      line_spacing_ratio = 0.35 if is_indic_text else 0.20
 
-      if wrap_text:
+      def _get_line_h_px(f, fs):
+        if hasattr(f, 'getmetrics'):
+          asc, dsc = f.getmetrics()
+          h = asc + dsc
+          return max(h, int(round(fs * 1.35))) if is_indic_text else max(h, fs)
+        elif hasattr(f, 'getbbox'):
+          test_s = "अिैौ्ग्यीÅgjyq|" if is_indic_text else "Ågjyq|"
+          b = f.getbbox(test_s)
+          return max(fs, b[3] - b[1])
+        return fs
+        
+      max_w_bound = max(1, w - 4)
+
+      # 1. Determine font_size_px based on flags (auto_expand, smart_fit, auto_shrink)
+      if auto_expand:
+        # Auto-scale up to +3pt max boost over base font size
+        max_boost_px = int(round(3.0 * (dpi / 72.0)))
+        start_size_px = font_size_px + max_boost_px
+        min_size_floor_px = int(round(4.0 * (dpi / 72.0))) if auto_shrink else font_size_px
+
+        cand_sz = start_size_px
+        while cand_sz >= min_size_floor_px:
+          cand_fnt = _load_font(cand_sz)
+          cand_lines = wrap_text_pil(text, cand_fnt, max_w_bound) if wrap_text else [text]
+          lh_px = _get_line_h_px(cand_fnt, cand_sz)
+          lh_mm = lh_px / pixels_per_mm
+          tot_h_mm = len(cand_lines) * (lh_mm * (1.0 + line_spacing_ratio)) - (lh_mm * line_spacing_ratio)
+          max_w_px = max(cand_fnt.getlength(l) if hasattr(cand_fnt, 'getlength') else (cand_fnt.getbbox(l)[2] - cand_fnt.getbbox(l)[0] if hasattr(cand_fnt, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
+
+          if max_w_px <= max_w_bound and tot_h_mm <= el_h:
+            font_size_px = cand_sz
+            break
+          cand_sz -= 1
+        else:
+          font_size_px = min_size_floor_px
+
+      elif smart_fit:
+        # Moderate boost (+2pt to +4pt) for short text
+        base_font = _load_font(font_size_px)
+        base_lines = wrap_text_pil(text, base_font, max_w_bound) if wrap_text else [text]
+        base_line_count = len(base_lines)
+        base_lh_px = _get_line_h_px(base_font, font_size_px)
+        base_tot_h_mm = base_line_count * (base_lh_px / pixels_per_mm * (1.0 + line_spacing_ratio)) - (base_lh_px / pixels_per_mm * line_spacing_ratio)
+        base_max_w_px = max(base_font.getlength(l) if hasattr(base_font, 'getlength') else (base_font.getbbox(l)[2] - base_font.getbbox(l)[0] if hasattr(base_font, 'getbbox') else len(l) * 8) for l in base_lines) if base_lines else 0
+
+        if base_tot_h_mm <= el_h and base_max_w_px <= max_w_bound:
+          boost_px = max(2, int(round(4.0 * (dpi / 72.0))))
+          for frac in [1.0, 0.75, 0.5, 0.25]:
+            cand_size = font_size_px + max(1, int(round(boost_px * frac)))
+            cand_font = _load_font(cand_size)
+            cand_lines = wrap_text_pil(text, cand_font, max_w_bound) if wrap_text else [text]
+            if wrap_text and len(cand_lines) > base_line_count:
+              continue
+            cand_lh_px = _get_line_h_px(cand_font, cand_size)
+            cand_tot_h_mm = len(cand_lines) * (cand_lh_px / pixels_per_mm * (1.0 + line_spacing_ratio)) - (cand_lh_px / pixels_per_mm * line_spacing_ratio)
+            cand_max_w_px = max(cand_font.getlength(l) if hasattr(cand_font, 'getlength') else (cand_font.getbbox(l)[2] - cand_font.getbbox(l)[0] if hasattr(cand_font, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
+            if cand_tot_h_mm <= el_h and cand_max_w_px <= max_w_bound:
+              font_size_px = cand_size
+              break
+
+      elif auto_shrink:
+        # Standard auto-shrink down if text overflows
         min_size_px = int(round(4.0 * (dpi / 72.0)))
-        boost_px = max(1, int(round(2.0 * (dpi / 72.0))))
-        if smart_fit:
-          base_font = _load_font(font_size_px)
-          base_lines = wrap_text_pil(text, base_font, max(1, w - 4))
-          base_line_count = len(base_lines)
-          base_line_h_px = base_font.getbbox("A")[3] - base_font.getbbox("A")[1] if hasattr(base_font, 'getbbox') else font_size_px
-          base_tot_h_mm = base_line_count * (base_line_h_px / pixels_per_mm * 1.25)
-          base_max_w_px = max(base_font.getlength(l) if hasattr(base_font, 'getlength') else (base_font.getbbox(l)[2] - base_font.getbbox(l)[0] if hasattr(base_font, 'getbbox') else len(l) * 8) for l in base_lines) if base_lines else 0
-          if base_tot_h_mm <= el_h and base_max_w_px <= max(1, w - 4):
-            for frac in [1.0, 0.75, 0.5, 0.25]:
-              cand_size = font_size_px + max(1, int(round(boost_px * frac)))
-              cand_font = _load_font(cand_size)
-              cand_lines = wrap_text_pil(text, cand_font, max(1, w - 4))
-              if len(cand_lines) > base_line_count:
-                continue
-              cand_line_h_px = cand_font.getbbox("A")[3] - cand_font.getbbox("A")[1] if hasattr(cand_font, 'getbbox') else cand_size
-              cand_tot_h_mm = len(cand_lines) * (cand_line_h_px / pixels_per_mm * 1.25)
-              cand_max_w_px = max(cand_font.getlength(l) if hasattr(cand_font, 'getlength') else (cand_font.getbbox(l)[2] - cand_font.getbbox(l)[0] if hasattr(cand_font, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
-              if cand_tot_h_mm <= el_h and cand_max_w_px <= max(1, w - 4):
-                font_size_px = cand_size
-                break
-
-        is_indic_text = any((0x0900 <= ord(c) <= 0x0D7F) or (0x0600 <= ord(c) <= 0x06FF) for c in (text or ""))
-        line_spacing_ratio = 0.48 if is_indic_text else 0.28
-
-        # Reduce font size until text lines fit within max_w AND el_h
         while font_size_px > min_size_px:
           font = _load_font(font_size_px)
-          lines_to_draw = wrap_text_pil(text, font, max(1, w - 4))
-          line_h_px = font.getbbox("A")[3] - font.getbbox("A")[1] if hasattr(font, 'getbbox') else font_size_px
-          line_h_mm = line_h_px / pixels_per_mm
-          line_spacing_mm = line_h_mm * line_spacing_ratio
-          line_height_total_mm = line_h_mm + line_spacing_mm
-          total_text_h_mm = len(lines_to_draw) * line_height_total_mm - line_spacing_mm
-          max_line_w_px = max(font.getlength(l) if hasattr(font, 'getlength') else (font.getbbox(l)[2] - font.getbbox(l)[0] if hasattr(font, 'getbbox') else len(l) * 8) for l in lines_to_draw) if lines_to_draw else 0
+          lines = wrap_text_pil(text, font, max_w_bound) if wrap_text else [text]
+          lh_px = _get_line_h_px(font, font_size_px)
+          lh_mm = lh_px / pixels_per_mm
+          tot_h_mm = len(lines) * (lh_mm * (1.0 + line_spacing_ratio)) - (lh_mm * line_spacing_ratio)
+          max_w_px = max(font.getlength(l) if hasattr(font, 'getlength') else (font.getbbox(l)[2] - font.getbbox(l)[0] if hasattr(font, 'getbbox') else len(l) * 8) for l in lines) if lines else 0
 
-          if total_text_h_mm <= el_h and max_line_w_px <= max(1, w - 4):
-            break
-          if not auto_shrink and total_text_h_mm <= el_h * 1.05 and max_line_w_px <= w:
+          if tot_h_mm <= el_h and max_w_px <= max_w_bound:
             break
           font_size_px -= 1
-        else:
-          font = _load_font(font_size_px)
-          lines_to_draw = wrap_text_pil(text, font, max(1, w - 4))
 
-        # Calculate line height in mm
-        if hasattr(font, 'getbbox'):
-          bbox = font.getbbox("A")
-          line_h_px = bbox[3] - bbox[1]
-        else:
-          line_h_px = font_size_px
+      # 2. Render text at final computed font_size_px
+      font = _load_font(font_size_px)
+      lines_to_draw = wrap_text_pil(text, font, max_w_bound) if wrap_text else [text]
+      line_h_px = _get_line_h_px(font, font_size_px)
+      line_h_mm = line_h_px / pixels_per_mm
+      line_spacing_mm = line_h_mm * line_spacing_ratio
+      line_height_total_mm = line_h_mm + line_spacing_mm
+      total_text_h_mm = len(lines_to_draw) * line_height_total_mm - line_spacing_mm
 
-        line_h_mm = line_h_px / pixels_per_mm
-        line_spacing_mm = line_h_mm * line_spacing_ratio
-        line_height_total_mm = line_h_mm + line_spacing_mm
-        total_text_h_mm = len(lines_to_draw) * line_height_total_mm - line_spacing_mm
+      start_y_mm = max(0.0, (el_h - total_text_h_mm) / 2.0)
 
-        # Center vertically inside element bounding box in mm
-        start_y_mm = max(0.0, (el_h - total_text_h_mm) / 2.0)
-
-        # Draw each line onto temp_img
-        for i, line in enumerate(lines_to_draw):
-          if hasattr(font, 'getlength'):
-            line_w_px = font.getlength(line)
-          elif hasattr(font, 'getbbox'):
-            line_w_px = font.getbbox(line)[2]
-          else:
-            line_w_px = 100
-
-          line_w_mm = line_w_px / pixels_per_mm
-
-          # Calculate center point of line in mm relative to temp_img (0 to el_w)
-          if text_align == "center":
-            draw_cx_mm = el_w / 2.0
-          elif text_align == "right":
-            draw_cx_mm = el_w - line_w_mm / 2.0
-          else:
-            draw_cx_mm = line_w_mm / 2.0
-
-          draw_cy_mm = start_y_mm + i * line_height_total_mm + line_h_mm / 2.0
-
-          # Convert to pixels for drawing on temp_img
-          cx_px = int(round(draw_cx_mm * pixels_per_mm))
-          cy_px = int(round(draw_cy_mm * pixels_per_mm))
-
-          if cy_px <= h:
-            temp_draw.text((cx_px, cy_px), line, font=font, fill=text_color, anchor="mm")
-            if bold:
-              temp_draw.text((cx_px + 1, cy_px), line, font=font, fill=text_color, anchor="mm")
-
-      else:
-        # Auto-adjust font size so single-line text NEVER overflows element width or height
-        min_size = max(4, int(round(4.0 * (dpi / 72.0))))
-        max_allowed_w_px = max(10, min(w - 4, width_px - x - 1))
-        boost_px = max(1, int(round(2.0 * (dpi / 72.0))))
-
-        if smart_fit:
-          base_font = _load_font(font_size_px)
-          if hasattr(temp_draw, 'textbbox'):
-            b = temp_draw.textbbox((0, 0), text, font=base_font)
-            bw, bh = b[2] - b[0], b[3] - b[1]
-          elif hasattr(base_font, 'getbbox'):
-            b = base_font.getbbox(text)
-            bw, bh = b[2] - b[0], b[3] - b[1]
-          else:
-            bw, bh = len(text) * 8, font_size_px
-          if bw <= max_allowed_w_px and (bh / pixels_per_mm) <= el_h:
-            for frac in [1.0, 0.75, 0.5, 0.25]:
-              cand_size = font_size_px + max(1, int(round(boost_px * frac)))
-              cand_font = _load_font(cand_size)
-              if hasattr(temp_draw, 'textbbox'):
-                cb = temp_draw.textbbox((0, 0), text, font=cand_font)
-                cw, ch = cb[2] - cb[0], cb[3] - cb[1]
-              elif hasattr(cand_font, 'getbbox'):
-                cb = cand_font.getbbox(text)
-                cw, ch = cb[2] - cb[0], cb[3] - cb[1]
-              else:
-                cw, ch = len(text) * 8, cand_size
-              if cw <= max_allowed_w_px and (ch / pixels_per_mm) <= el_h:
-                font_size_px = cand_size
-                break
-
-        while font_size_px > min_size:
-          font = _load_font(font_size_px)
-          if hasattr(temp_draw, 'textbbox'):
-            bbox = temp_draw.textbbox((0, 0), text, font=font)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
-          elif hasattr(font, 'getbbox'):
-            bbox = font.getbbox(text)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
-          else:
-            text_w, text_h = temp_draw.textsize(text, font=font) if hasattr(temp_draw, 'textsize') else (100, 20)
-
-          text_h_mm = text_h / pixels_per_mm
-          if text_w <= max_allowed_w_px and (not auto_shrink or text_h_mm <= el_h):
-            break
-          font_size_px -= 1
-        else:
-          font = _load_font(font_size_px)
-          
-        # Get text bounds (Pillow 10+ compatible)
-        if hasattr(temp_draw, 'textbbox'):
-          bbox = temp_draw.textbbox((0, 0), text, font=font)
-          text_w = bbox[2] - bbox[0]
-          text_h = bbox[3] - bbox[1]
+      for i, line in enumerate(lines_to_draw):
+        if hasattr(font, 'getlength'):
+          line_w_px = font.getlength(line)
         elif hasattr(font, 'getbbox'):
-          bbox = font.getbbox(text)
-          text_w = bbox[2] - bbox[0]
-          text_h = bbox[3] - bbox[1]
+          b = font.getbbox(line)
+          line_w_px = b[2] - b[0]
         else:
-          text_w, text_h = temp_draw.textsize(text, font=font) if hasattr(temp_draw, 'textsize') else (100, 20)
-        
-        text_w_mm = text_w / pixels_per_mm
-        text_h_mm = text_h / pixels_per_mm
+          line_w_px = len(line) * 8.0
 
-        # Dynamic inline text position adjustment if anchored right after previous text (matching ZPL driver standard)
-        wrap_text = bool(el.get("wrapText", False))
-        if not wrap_text and last_text_end_x_px > 0 and abs(el_y - last_text_y_mm) < 3.0 and el_x <= (last_text_container_end_x_mm + 5.0):
-          spacing_gap_mm = max(1.0, el_x - last_text_container_end_x_mm) if el_x > last_text_container_end_x_mm else 1.5
-          spacing_gap_px = int(round(spacing_gap_mm * pixels_per_mm))
-          raw_x = last_text_end_x_px + spacing_gap_px
-          x = max(min_x_px, min(raw_x, max_x_px - 1))
+        line_w_mm = line_w_px / pixels_per_mm
 
-        # Center vertically and align horizontally inside the element box using mm coordinates
-        pad_x_mm = max(0.0, el_x)
-        pad_y_mm = max(0.0, el_y)
         if text_align == "center":
-          draw_cx_mm = pad_x_mm + el_w / 2.0
+          draw_cx_mm = el_w / 2.0
         elif text_align == "right":
-          draw_cx_mm = pad_x_mm + el_w - text_w_mm / 2.0
+          draw_cx_mm = el_w - line_w_mm / 2.0
         else:
-          draw_cx_mm = pad_x_mm + text_w_mm / 2.0
+          draw_cx_mm = line_w_mm / 2.0
 
-        draw_cy_mm = pad_y_mm + el_h / 2.0
+        draw_cy_mm = start_y_mm + i * line_height_total_mm + line_h_mm / 2.0
 
-        # Convert final coordinates to pixels
-        draw_cx_px = int(round(draw_cx_mm * pixels_per_mm))
-        draw_cy_px = int(round(draw_cy_mm * pixels_per_mm))
+        cx_px = int(round(draw_cx_mm * pixels_per_mm))
+        cy_px = int(round(draw_cy_mm * pixels_per_mm))
 
-        # Clamp drawing center within 1.5mm safe margin boundaries so text never bleeds outside the page
-        text_half_w_px = int(round(text_w / 2.0))
-        text_half_h_px = int(round(text_h / 2.0))
-        draw_cx_px = max(min_x_px + text_half_w_px, min(draw_cx_px, max_x_px - text_half_w_px))
-        draw_cy_px = max(min_y_px + text_half_h_px, min(draw_cy_px, max_y_px - text_half_h_px))
+        if cy_px <= h:
+          temp_draw.text((cx_px, cy_px), line, font=font, fill=text_color, anchor="mm")
+          if bold:
+            temp_draw.text((cx_px + 1, cy_px), line, font=font, fill=text_color, anchor="mm")
 
-        if not wrap_text:
-          last_text_end_x_px = draw_cx_px + text_half_w_px
-          last_text_y_mm = el_y
-          last_text_container_end_x_mm = el_x + el_w
-        else:
-          last_text_end_x_px = -1
-
-        image.paste(temp_img, (x, y), temp_img)  # paste blank temp first (for rotation support)
-        # Draw text directly onto the main image — no width clipping
-        draw.text((draw_cx_px, draw_cy_px), text, font=font, fill=text_color, anchor="mm")
-        if bold:
-          draw.text((draw_cx_px + 1, draw_cy_px), text, font=font, fill=text_color, anchor="mm")
-        # Skip the default paste-at-end below by clearing temp_img
-        temp_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+      image.paste(temp_img, (x, y), temp_img)
       
     # 4. Barcode / QR drawing
     elif el_type in ["barcode", "qrcode"]:

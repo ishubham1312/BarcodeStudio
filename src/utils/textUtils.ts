@@ -16,12 +16,13 @@ export function getAutoShrunkWrappedFontSize(
   fontWeight?: string,
   fontStyle?: string,
   smartFit?: boolean,
-  autoShrink?: boolean
+  autoShrink?: boolean,
+  autoExpand?: boolean
 ): number {
   if (!text || maxWidthPx <= 0 || initialFontSizePx <= 0) return initialFontSizePx;
 
   // Memoization lookup for 60fps canvas performance
-  const cacheKey = `${text}_${fontFamily}_${initialFontSizePx}_${maxWidthPx}_${maxHeightPx}_${wrapText ? 1 : 0}_${fontWeight || ''}_${fontStyle || ''}_${smartFit ? 1 : 0}_${autoShrink ? 1 : 0}`;
+  const cacheKey = `${text}_${fontFamily}_${initialFontSizePx}_${maxWidthPx}_${maxHeightPx}_${wrapText ? 1 : 0}_${fontWeight || ''}_${fontStyle || ''}_${smartFit ? 1 : 0}_${autoShrink ? 1 : 0}_${autoExpand ? 1 : 0}`;
   const cachedVal = fontSizeCache.get(cacheKey);
   if (cachedVal !== undefined) {
     return cachedVal;
@@ -104,7 +105,38 @@ export function getAutoShrunkWrappedFontSize(
     };
 
     const isIndic = /[\u0900-\u0D7F\u0600-\u06FF]/.test(text);
-    const lineSpacingMultiplier = isIndic ? 1.48 : 1.28;
+    const lineSpacingMultiplier = isIndic ? 1.65 : 1.30;
+
+    // 0. Auto Expand Font (Fit Box) Logic: Smart font expansion capped at +3px boost max over base size
+    if (autoExpand) {
+      const maxBoostPx = 3.0;
+      const startFontSizePx = initialFontSizePx + maxBoostPx;
+      const minFontSizePx = autoShrink ? minFontSize : initialFontSizePx;
+
+      let currentSize = startFontSizePx;
+      while (currentSize >= minFontSizePx) {
+        const lines = getWrappedLines(text, currentSize);
+        const lineHeight = currentSize * lineSpacingMultiplier;
+        const totalHeight = lines.length * lineHeight;
+
+        let fitsWidth = true;
+        for (const line of lines) {
+          if (measureWidth(line, currentSize) > maxAllowedWidth) {
+            fitsWidth = false;
+            break;
+          }
+        }
+
+        const fitsHeight = maxAllowedHeight <= 0 || totalHeight <= maxAllowedHeight;
+
+        if (fitsWidth && fitsHeight) {
+          return currentSize;
+        }
+
+        currentSize -= 0.5;
+      }
+      return minFontSizePx;
+    }
 
     // 1. Smart Fit scaling UP logic (dynamically boost font size for short text)
     if (smartFit) {
@@ -186,6 +218,35 @@ export function getAutoShrunkWrappedFontSize(
   }
   fontSizeCache.set(cacheKey, calculatedSize);
   return calculatedSize;
+}
+
+/**
+ * Utility function for auto-scaling font size to fit container bounding box.
+ */
+export function getAutoScaledFontSize(
+  text: string,
+  fontFamily: string,
+  initialFontSizePx: number,
+  maxWidthPx: number,
+  maxHeightPx: number,
+  wrapText: boolean,
+  fontWeight?: string,
+  fontStyle?: string,
+  autoShrink?: boolean
+): number {
+  return getAutoShrunkWrappedFontSize(
+    text,
+    fontFamily,
+    initialFontSizePx,
+    maxWidthPx,
+    maxHeightPx,
+    wrapText,
+    fontWeight,
+    fontStyle,
+    false,
+    autoShrink,
+    true
+  );
 }
 
 /**

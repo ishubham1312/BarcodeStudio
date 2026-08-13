@@ -24,6 +24,7 @@ export interface LabelElement {
   textAlign?: 'left' | 'center' | 'right';
   autoShrink?: boolean;
   smartFit?: boolean;
+  autoExpand?: boolean;
   wrapText?: boolean;
 
   // Field binding

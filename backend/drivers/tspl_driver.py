@@ -228,8 +228,8 @@ def build_tspl_label_header(template: Dict[str, Any], dpi: int, hw_offset_x_dots
         f"GAP {gap_mm:.1f} mm,0 mm",
         direction_cmd,
         reference_line,
-        "SPEED 4",
-        "DENSITY 10",
+        "SPEED 3",
+        "DENSITY 8",
         "SET CUTTER OFF",
         "SET TEAR ON",
     ]
@@ -313,8 +313,13 @@ def translate_element_to_tspl(
         except UnicodeEncodeError:
             has_non_ascii = True
             
-        wrap_text = el.get("wrapText", False) or has_non_ascii
-        if wrap_text:
+        auto_expand = bool(el.get("autoExpand", False) or el.get("auto_expand", False))
+        smart_fit = bool(el.get("smartFit", False) or el.get("smart_fit", False))
+        auto_shrink = bool(el.get("autoShrink", False) or el.get("auto_shrink", False))
+        wrap_text_option = bool(el.get("wrapText", False))
+            
+        use_bitmap = wrap_text_option or has_non_ascii or auto_expand or smart_fit or auto_shrink
+        if use_bitmap:
             try:
                 from PIL import Image, ImageDraw, ImageFont
                 from backend.services.printer_service import (
@@ -368,25 +373,36 @@ def translate_element_to_tspl(
                 font_candidates = _font_candidates_for_script(
                     script_kind, bold, italic, get_font_path(font_family, bold, italic)
                 )
-                font_size_pt = float(el.get("fontSize", 10))
-                font_size_px = int(font_size_pt * (dpi / 72.0))
+                auto_expand = el.get("autoExpand", False) or el.get("auto_expand", False)
+                smart_fit = el.get("smartFit", False) or el.get("smart_fit", False)
+                auto_shrink = el.get("autoShrink", False) or el.get("auto_shrink", False)
+                wrap_text = bool(el.get("wrapText", False))
 
-                # RAQM complex-text-layout engine is required for Indic/CJK/Arabic
-                # shaping; otherwise conjuncts/matras render as broken dashes/boxes.
-                # Pass the text so a font that actually contains the glyphs is chosen.
-                font = _load_text_font(font_candidates, font_size_px, script_kind != "latin", value)
+                is_indic_text = script_kind == "indic" or any(0x0900 <= ord(c) <= 0x0D7F for c in (value or ""))
+                line_spacing_ratio = 0.35 if is_indic_text else 0.20
 
-                # Wrap text helper function — handles both space-separated (Latin) and
-                # character-level (Indic/CJK/Arabic) scripts
-                def wrap_text_pil(txt: str, fnt: ImageFont.ImageFont, max_w: int) -> list:
+                def _get_line_h(f, fs):
+                    if hasattr(f, 'getmetrics'):
+                        asc, dsc = f.getmetrics()
+                        h = asc + dsc
+                        return max(h, int(round(fs * 1.35))) if is_indic_text else max(h, fs)
+                    elif hasattr(f, 'getbbox'):
+                        test_s = "अिैौ्ग्यीÅgjyq|" if is_indic_text else "Ågjyq|"
+                        b = f.getbbox(test_s)
+                        return max(fs, b[3] - b[1])
+                    return fs
+
+                max_w_bound = max(1, unrot_w - 4)
+
+                def wrap_text_pil(txt: str, fnt: Any, max_w: int) -> list:
                     def _measure(s):
                         if hasattr(fnt, 'getlength'):
                             return fnt.getlength(s)
                         elif hasattr(fnt, 'getbbox'):
-                            return fnt.getbbox(s)[2]
-                        return 100
+                            b = fnt.getbbox(s)
+                            return b[2] - b[0]
+                        return len(s) * 8.0
 
-                    # Detect if text needs character-level wrapping (no space boundaries)
                     has_indic_or_cjk = any(
                         (0x0900 <= ord(c) <= 0x0D7F) or
                         (0x4E00 <= ord(c) <= 0x9FFF) or
@@ -398,7 +414,6 @@ def translate_element_to_tspl(
 
                     wrapped_lines = []
                     if has_indic_or_cjk:
-                        # Character-level wrapping for scripts without clear word spaces
                         curr_line = ""
                         for char in txt:
                             test = curr_line + char
@@ -411,7 +426,6 @@ def translate_element_to_tspl(
                         if curr_line:
                             wrapped_lines.append(curr_line)
                     else:
-                        # Word-level wrapping for Latin/space-separated scripts
                         words = txt.split(" ")
                         curr_line = []
                         for word in words:
@@ -429,15 +443,67 @@ def translate_element_to_tspl(
                             wrapped_lines.append(" ".join(curr_line))
                     return wrapped_lines
 
-                lines_to_draw = wrap_text_pil(value, font, unrot_w)
+                # Determine font_size_px based on flags (auto_expand, smart_fit, auto_shrink)
+                if auto_expand:
+                    max_boost_px = int(round(3.0 * (dpi / 72.0)))
+                    start_size_px = font_size_px + max_boost_px
+                    min_size_floor_px = int(round(4.0 * (dpi / 72.0))) if auto_shrink else font_size_px
 
-                if hasattr(font, 'getbbox'):
-                    bbox = font.getbbox("A")
-                    line_h = bbox[3] - bbox[1]
-                else:
-                    line_h = font_size_px
+                    cand_sz = start_size_px
+                    while cand_sz >= min_size_floor_px:
+                        cand_fnt = _load_text_font(font_candidates, cand_sz, script_kind != "latin", value)
+                        cand_lines = wrap_text_pil(value, cand_fnt, max_w_bound) if wrap_text else [value]
+                        lh_px = _get_line_h(cand_fnt, cand_sz)
+                        tot_h_px = len(cand_lines) * (lh_px * (1.0 + line_spacing_ratio)) - (lh_px * line_spacing_ratio)
+                        max_w_px = max(cand_fnt.getlength(l) if hasattr(cand_fnt, 'getlength') else (cand_fnt.getbbox(l)[2] - cand_fnt.getbbox(l)[0] if hasattr(cand_fnt, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
 
-                line_spacing = int(line_h * 0.25)
+                        if max_w_px <= max_w_bound and tot_h_px <= unrot_h:
+                            font_size_px = cand_sz
+                            break
+                        cand_sz -= 1
+                    else:
+                        font_size_px = min_size_floor_px
+
+                elif smart_fit:
+                    base_font = _load_text_font(font_candidates, font_size_px, script_kind != "latin", value)
+                    base_lines = wrap_text_pil(value, base_font, max_w_bound) if wrap_text else [value]
+                    base_line_count = len(base_lines)
+                    base_lh_px = _get_line_h(base_font, font_size_px)
+                    base_tot_h_px = base_line_count * (base_lh_px * (1.0 + line_spacing_ratio)) - (base_lh_px * line_spacing_ratio)
+                    base_max_w_px = max(base_font.getlength(l) if hasattr(base_font, 'getlength') else (base_font.getbbox(l)[2] - base_font.getbbox(l)[0] if hasattr(base_font, 'getbbox') else len(l) * 8) for l in base_lines) if base_lines else 0
+
+                    if base_tot_h_px <= unrot_h and base_max_w_px <= max_w_bound:
+                        boost_px = max(2, int(round(4.0 * (dpi / 72.0))))
+                        for frac in [1.0, 0.75, 0.5, 0.25]:
+                            cand_size = font_size_px + max(1, int(round(boost_px * frac)))
+                            cand_font = _load_text_font(font_candidates, cand_size, script_kind != "latin", value)
+                            cand_lines = wrap_text_pil(value, cand_font, max_w_bound) if wrap_text else [value]
+                            if wrap_text and len(cand_lines) > base_line_count:
+                                continue
+                            cand_lh_px = _get_line_h(cand_font, cand_size)
+                            cand_tot_h_px = len(cand_lines) * (cand_lh_px * (1.0 + line_spacing_ratio)) - (cand_lh_px * line_spacing_ratio)
+                            cand_max_w_px = max(cand_font.getlength(l) if hasattr(cand_font, 'getlength') else (cand_font.getbbox(l)[2] - cand_font.getbbox(l)[0] if hasattr(cand_font, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
+                            if cand_tot_h_px <= unrot_h and cand_max_w_px <= max_w_bound:
+                                font_size_px = cand_size
+                                break
+
+                elif auto_shrink:
+                    min_size_px = int(round(4.0 * (dpi / 72.0)))
+                    while font_size_px > min_size_px:
+                        font = _load_text_font(font_candidates, font_size_px, script_kind != "latin", value)
+                        lines = wrap_text_pil(value, font, max_w_bound) if wrap_text else [value]
+                        lh_px = _get_line_h(font, font_size_px)
+                        tot_h_px = len(lines) * (lh_px * (1.0 + line_spacing_ratio)) - (lh_px * line_spacing_ratio)
+                        max_w_px = max(font.getlength(l) if hasattr(font, 'getlength') else (font.getbbox(l)[2] - font.getbbox(l)[0] if hasattr(font, 'getbbox') else len(l) * 8) for l in lines) if lines else 0
+
+                        if tot_h_px <= unrot_h and max_w_px <= max_w_bound:
+                            break
+                        font_size_px -= 1
+
+                font = _load_text_font(font_candidates, font_size_px, script_kind != "latin", value)
+                lines_to_draw = wrap_text_pil(value, font, max_w_bound) if wrap_text else [value]
+                line_h = _get_line_h(font, font_size_px)
+                line_spacing = int(line_h * line_spacing_ratio)
                 line_height_total = line_h + line_spacing
                 total_text_h = len(lines_to_draw) * line_height_total - line_spacing
                 start_y = max(0, (unrot_h - total_text_h) // 2)
@@ -448,19 +514,20 @@ def translate_element_to_tspl(
                     if hasattr(font, 'getlength'):
                         line_w = font.getlength(line)
                     elif hasattr(font, 'getbbox'):
-                        line_w = font.getbbox(line)[2]
+                        b = font.getbbox(line)
+                        line_w = b[2] - b[0]
                     else:
-                        line_w = 100
+                        line_w = len(line) * 8.0
 
                     if text_align == "center":
-                        draw_x = max(0, (unrot_w - line_w) // 2)
+                        draw_x = max(0, int((unrot_w - line_w) // 2))
                     elif text_align == "right":
-                        draw_x = max(0, unrot_w - line_w)
+                        draw_x = max(0, int(unrot_w - line_w))
                     else:
                         draw_x = 0
 
                     draw_y = start_y + idx_line * line_height_total
-                    if draw_y + line_h <= unrot_h:
+                    if draw_y + line_h <= unrot_h + 10:
                         draw.text((draw_x, draw_y), line, font=font, fill=0) # 0 is black text
 
                 # Apply rotation
@@ -478,9 +545,9 @@ def translate_element_to_tspl(
                 logger.info(f"[TSPL] Spooled wrapped text as BITMAP {w_d}x{h_d}")
             except Exception as tex:
                 logger.warning(f"[TSPL] Wrapped text BITMAP conversion failed: {tex}")
-                wrap_text = False
+                use_bitmap = False
 
-        if not wrap_text and not has_non_ascii:
+        if not use_bitmap:
             # ASCII-only TEXT command — only used for pure ASCII text
             font_size_pt = float(el.get("fontSize", 10))
             font_h_d = max(8, int(font_size_pt * dpi / 72.0))

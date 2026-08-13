@@ -1814,7 +1814,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           : "justify-start";
     const baseFontSizePx = (el.fontSize || 10) * (25.4 / 72.0) * mmToPx;
     const wrapEnabled = (el as any).wrapText === true;
-    const finalFontSizePx = (el.autoShrink || el.smartFit)
+    const finalFontSizePx = (el.autoShrink || el.smartFit || el.autoExpand)
       ? getAutoShrunkWrappedFontSize(
         content,
         el.fontFamily || "Segoe UI",
@@ -1825,7 +1825,8 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         el.fontWeight,
         el.fontStyle,
         el.smartFit,
-        el.autoShrink
+        el.autoShrink,
+        el.autoExpand
       )
       : baseFontSizePx;
 
@@ -1843,9 +1844,9 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           color: el.textColor || "#000000",
           display: "flex",
           alignItems: "center",
-          lineHeight: isIndicContent ? 1.48 : 1.28,
-          paddingTop: isIndicContent ? "2px" : "0px",
-          paddingBottom: isIndicContent ? "2px" : "0px",
+          lineHeight: isIndicContent ? 1.65 : 1.30,
+          paddingTop: isIndicContent ? "3px" : "0px",
+          paddingBottom: isIndicContent ? "3px" : "0px",
           whiteSpace: wrapEnabled ? "pre-wrap" : "nowrap",
           wordBreak: wrapEnabled ? "break-word" : "normal",
           width: wrapEnabled ? "100%" : "max-content",

@@ -28,12 +28,12 @@ const NumInput = ({ value, onChange, className, step = "1", min, max, disabled }
       onChange={e => {
         setLocalValue(e.target.value);
         if (e.target.value === '' || e.target.value === '-') {
-           onChange(0);
+          onChange(0);
         } else {
-           const parsed = parseFloat(e.target.value);
-           if (!isNaN(parsed)) {
-              onChange(parsed);
-           }
+          const parsed = parseFloat(e.target.value);
+          if (!isNaN(parsed)) {
+            onChange(parsed);
+          }
         }
       }}
       onBlur={() => {
@@ -306,11 +306,10 @@ const AnchorParentDropdown: React.FC<{
       {open && (
         <div className="absolute z-50 left-0 right-0 mt-1 bg-metro-panel border border-metro-border rounded-xl shadow-2xl max-h-48 overflow-y-auto custom-scrollbar">
           <div
-            className={`px-2.5 py-2 text-xs cursor-pointer transition-colors font-bold ${
-              !selectedElement.parentId
-                ? 'bg-indigo-500/15 text-indigo-400'
-                : 'text-metro-primary hover:bg-metro-input'
-            }`}
+            className={`px-2.5 py-2 text-xs cursor-pointer transition-colors font-bold ${!selectedElement.parentId
+              ? 'bg-indigo-500/15 text-indigo-400'
+              : 'text-metro-primary hover:bg-metro-input'
+              }`}
             onMouseEnter={() => onHighlightElement?.(null)}
             onClick={() => {
               onUpdateElement(selectedElement.id, { parentId: undefined });
@@ -323,11 +322,10 @@ const AnchorParentDropdown: React.FC<{
           {candidates.map((el) => (
             <div
               key={el.id}
-              className={`px-2.5 py-2 text-xs cursor-pointer transition-colors font-bold ${
-                selectedElement.parentId === el.id
-                  ? 'bg-indigo-500/15 text-indigo-400'
-                  : 'text-metro-primary hover:bg-metro-input'
-              }`}
+              className={`px-2.5 py-2 text-xs cursor-pointer transition-colors font-bold ${selectedElement.parentId === el.id
+                ? 'bg-indigo-500/15 text-indigo-400'
+                : 'text-metro-primary hover:bg-metro-input'
+                }`}
               onMouseEnter={() => onHighlightElement?.(el.id)}
               onMouseLeave={() => onHighlightElement?.(null)}
               onClick={() => {
@@ -475,7 +473,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     ? INDIAN_SYMBOLOGIES.find(sym => sym.id === selectedElement.barcodeType)
     : null;
 
-  const filteredSymbologies = INDIAN_SYMBOLOGIES.filter(sym => 
+  const filteredSymbologies = INDIAN_SYMBOLOGIES.filter(sym =>
     sym.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     sym.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
     sym.badge.toLowerCase().includes(searchQuery.toLowerCase())
@@ -537,14 +535,14 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   }, [electronAPI]);
 
   const filteredFonts = useMemo(() => {
-    return fonts.filter(font => 
+    return fonts.filter(font =>
       font.toLowerCase().includes(fontSearch.toLowerCase())
     );
   }, [fonts, fontSearch]);
 
   return (
     <div className="w-60 bg-metro-panel border-l border-metro-border h-full flex flex-col overflow-y-auto select-none shrink-0 text-metro-secondary font-sans shadow-md">
-      
+
       {/* Header Info */}
       <div className="p-4 border-b border-metro-border bg-metro-panel shrink-0 flex items-center gap-2">
         <div className="p-1.5 bg-metro-accent/10 rounded-lg text-metro-accent">
@@ -560,29 +558,27 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
       {selectedElement ? (
         <div className="p-4 space-y-4 text-xs">
-          
+
           {/* Section: Barcode Tab selector if it is a Barcode */}
           {selectedElement.type === 'barcode' && (
             <div className="flex bg-metro-input p-1 rounded-xl border border-metro-border mb-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setBarcodeTab('properties')}
-                className={`flex-1 py-1.5 rounded-lg text-[10.5px] font-bold text-center transition-all cursor-pointer ${
-                  barcodeTab === 'properties'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-metro-secondary hover:text-metro-primary'
-                }`}
+                className={`flex-1 py-1.5 rounded-lg text-[10.5px] font-bold text-center transition-all cursor-pointer ${barcodeTab === 'properties'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-metro-secondary hover:text-metro-primary'
+                  }`}
               >
                 Properties
               </button>
               <button
                 type="button"
                 onClick={() => setBarcodeTab('symbology')}
-                className={`flex-1 py-1.5 rounded-lg text-[10.5px] font-bold text-center transition-all cursor-pointer ${
-                  barcodeTab === 'symbology'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-metro-secondary hover:text-metro-primary'
-                }`}
+                className={`flex-1 py-1.5 rounded-lg text-[10.5px] font-bold text-center transition-all cursor-pointer ${barcodeTab === 'symbology'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-metro-secondary hover:text-metro-primary'
+                  }`}
               >
                 Symbology
               </button>
@@ -623,11 +619,10 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         onClick={() => {
                           onUpdateElement(selectedElement.id, { barcodeType: sym.id });
                         }}
-                        className={`w-full text-left p-3 rounded-2xl border flex flex-col gap-2 transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-indigo-600/15 border-indigo-500 text-metro-primary'
-                            : 'bg-black/20 border-metro-border/50 hover:bg-black/40 hover:border-metro-secondary text-metro-secondary hover:text-metro-primary'
-                        }`}
+                        className={`w-full text-left p-3 rounded-2xl border flex flex-col gap-2 transition-all cursor-pointer ${isSelected
+                          ? 'bg-indigo-600/15 border-indigo-500 text-metro-primary'
+                          : 'bg-black/20 border-metro-border/50 hover:bg-black/40 hover:border-metro-secondary text-metro-secondary hover:text-metro-primary'
+                          }`}
                       >
                         <div className="flex items-center justify-between w-full">
                           <span className="font-extrabold text-[11px] leading-tight">{sym.name}</span>
@@ -720,11 +715,10 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 <div className="pt-1.5">
                   <button
                     onClick={() => handleBoolChange('locked', !selectedElement.locked)}
-                    className={`flex items-center gap-2 px-3 py-2 border text-[11px] font-bold w-full justify-center transition-all cursor-pointer rounded-xl ${
-                      selectedElement.locked
-                        ? 'bg-red-600/15 border-red-500/20 text-red-400 shadow-sm shadow-red-500/5'
-                        : 'bg-metro-input border-metro-border text-metro-primary hover:bg-metro-header hover:border-metro-secondary'
-                    }`}
+                    className={`flex items-center gap-2 px-3 py-2 border text-[11px] font-bold w-full justify-center transition-all cursor-pointer rounded-xl ${selectedElement.locked
+                      ? 'bg-red-600/15 border-red-500/20 text-red-400 shadow-sm shadow-red-500/5'
+                      : 'bg-metro-input border-metro-border text-metro-primary hover:bg-metro-header hover:border-metro-secondary'
+                      }`}
                   >
                     {selectedElement.locked ? (
                       <>
@@ -798,7 +792,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               {(selectedElement.type === 'text' || selectedElement.type === 'barcode' || selectedElement.type === 'qrcode') && (
                 <div className="space-y-2.5 pt-3 border-t border-metro-border">
                   <span className="text-[10px] font-bold text-metro-secondary uppercase tracking-wider block font-mono">Database Field Mapping</span>
-                  
+
                   <div>
                     <label className="text-[9px] text-metro-secondary block mb-1">Map SQL Column</label>
                     <select
@@ -808,7 +802,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         let updates: Partial<LabelElement> = {
                           fieldName: fName
                         };
-                        
+
                         // Intelligent barcode format auto-detection
                         if (selectedElement.type === 'barcode' && fName) {
                           const fNameLower = fName.toLowerCase();
@@ -906,7 +900,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               {(selectedElement.type === 'text' || selectedElement.type === 'barcode') && (
                 <div className="space-y-2.5 pt-3 border-t border-metro-border">
                   <span className="text-[10px] font-bold text-metro-secondary uppercase tracking-wider block font-mono">Typography</span>
-                  
+
                   <div className="relative" ref={fontDropdownRef}>
                     <label className="text-[9px] text-metro-secondary block mb-1">Font Family</label>
                     <button
@@ -919,7 +913,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                       </span>
                       <ChevronDown className="w-3.5 h-3.5 text-metro-secondary shrink-0 ml-1" />
                     </button>
-                    
+
                     {fontDropdownOpen && (
                       <div className="absolute left-0 right-0 mt-1 bg-metro-panel border border-metro-border rounded-xl shadow-2xl z-50 p-2 flex flex-col gap-1.5 min-w-[200px]">
                         {/* Search Input */}
@@ -934,7 +928,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                             autoFocus
                           />
                         </div>
-                        
+
                         {/* Scrollable list */}
                         <div className="max-h-56 overflow-y-auto flex flex-col gap-0.5 custom-scrollbar pr-1">
                           {filteredFonts.length === 0 ? (
@@ -952,11 +946,10 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                                     handleTextChange('fontFamily', font);
                                     setFontDropdownOpen(false);
                                   }}
-                                  className={`w-full flex items-center justify-between text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
-                                    isSelected 
-                                      ? "bg-metro-accent/15 text-metro-accent font-bold" 
-                                      : "text-metro-primary hover:bg-indigo-600 hover:text-white"
-                                  }`}
+                                  className={`w-full flex items-center justify-between text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${isSelected
+                                    ? "bg-metro-accent/15 text-metro-accent font-bold"
+                                    : "text-metro-primary hover:bg-indigo-600 hover:text-white"
+                                    }`}
                                 >
                                   <span style={{ fontFamily: font }}>{font}</span>
                                   {isSelected && <Check className="w-3.5 h-3.5 text-metro-accent shrink-0 ml-1" />}
@@ -992,21 +985,19 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleTextChange('fontWeight', selectedElement.fontWeight === 'bold' ? 'normal' : 'bold')}
-                      className={`flex-1 py-1.5 px-2 border rounded-xl text-[11px] font-bold text-center cursor-pointer transition-all duration-150 ${
-                        selectedElement.fontWeight === 'bold'
-                          ? 'bg-metro-accent border-metro-accent text-white shadow-sm'
-                          : 'border-metro-border text-metro-primary hover:bg-metro-header hover:text-white'
-                      }`}
+                      className={`flex-1 py-1.5 px-2 border rounded-xl text-[11px] font-bold text-center cursor-pointer transition-all duration-150 ${selectedElement.fontWeight === 'bold'
+                        ? 'bg-metro-accent border-metro-accent text-white shadow-sm'
+                        : 'border-metro-border text-metro-primary hover:bg-metro-header hover:text-white'
+                        }`}
                     >
                       Bold
                     </button>
                     <button
                       onClick={() => handleTextChange('fontStyle', selectedElement.fontStyle === 'italic' ? 'normal' : 'italic')}
-                      className={`flex-1 py-1.5 px-2 border rounded-xl text-[11px] italic text-center cursor-pointer transition-all duration-150 ${
-                        selectedElement.fontStyle === 'italic'
-                          ? 'bg-metro-accent border-metro-accent text-white shadow-sm'
-                          : 'border-metro-border text-metro-primary hover:bg-metro-header hover:text-white'
-                      }`}
+                      className={`flex-1 py-1.5 px-2 border rounded-xl text-[11px] italic text-center cursor-pointer transition-all duration-150 ${selectedElement.fontStyle === 'italic'
+                        ? 'bg-metro-accent border-metro-accent text-white shadow-sm'
+                        : 'border-metro-border text-metro-primary hover:bg-metro-header hover:text-white'
+                        }`}
                     >
                       Italic
                     </button>
@@ -1019,11 +1010,10 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         <button
                           key={align}
                           onClick={() => handleTextChange('textAlign', align)}
-                          className={`flex-1 py-1.5 flex items-center justify-center transition-all cursor-pointer rounded-lg ${
-                            selectedElement.textAlign === align
-                              ? 'bg-metro-accent text-white shadow-sm'
-                              : 'hover:bg-metro-header text-metro-secondary hover:text-metro-primary'
-                          }`}
+                          className={`flex-1 py-1.5 flex items-center justify-center transition-all cursor-pointer rounded-lg ${selectedElement.textAlign === align
+                            ? 'bg-metro-accent text-white shadow-sm'
+                            : 'hover:bg-metro-header text-metro-secondary hover:text-metro-primary'
+                            }`}
                         >
                           {align === 'left' && <AlignLeft className="w-3.5 h-3.5" />}
                           {align === 'center' && <AlignCenter className="w-3.5 h-3.5" />}
@@ -1049,20 +1039,19 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         Smart Font Auto-Shrink
                       </span>
                     </label>
-
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={selectedElement.smartFit === true}
+                        checked={selectedElement.autoExpand === true}
                         onChange={e => {
                           onUpdateElement(selectedElement.id, {
-                            smartFit: e.target.checked
+                            autoExpand: e.target.checked
                           });
                         }}
                         className="rounded border-metro-border text-metro-accent focus:ring-0 bg-metro-input w-4 h-4 cursor-pointer"
                       />
-                      <span className="text-[11px] text-metro-primary font-semibold" title="Dynamically scales up font size (up to +2px) for short text content to fill empty container space while preserving layout boundaries">
-                        Smart Fit
+                      <span className="text-[11px] text-metro-primary font-semibold" title="Smartly expands font size to fit the container bounding box when text content is short.">
+                        Auto Expand Font (Fit Box)
                       </span>
                     </label>
 
@@ -1103,7 +1092,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               {selectedElement.type === 'barcode' && (
                 <div className="space-y-2.5 pt-3 border-t border-metro-border">
                   <span className="text-[10px] font-bold text-metro-secondary uppercase tracking-wider block font-mono">Barcode Dimension Specs</span>
-                  
+
                   <label className="flex items-center gap-2 cursor-pointer pb-1">
                     <input
                       type="checkbox"
@@ -1117,7 +1106,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   {/* Dimension properties group box */}
                   <div className="border border-metro-border rounded-xl p-3 space-y-2.5 relative">
                     <span className="absolute -top-2 left-3 bg-metro-panel px-1 text-[9px] font-bold text-metro-secondary uppercase tracking-wider font-mono">Dimensions</span>
-                    
+
                     {/* Row 1: X Dimension & Ratio */}
                     <div className="grid grid-cols-2 gap-2 pt-1">
                       <div>
@@ -1192,7 +1181,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   <span className="text-[10px] font-bold text-metro-secondary uppercase tracking-wider block font-mono">
                     {selectedElement.type === 'line' || selectedElement.shapeType === 'line' ? 'Line Properties' : 'Shape Properties'}
                   </span>
-                  
+
                   <div>
                     <label className="text-[9px] text-metro-secondary block mb-1">Geometry</label>
                     <select
@@ -1251,7 +1240,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               {selectedElement.type === 'image' && (
                 <div className="space-y-2.5 pt-3 border-t border-metro-border">
                   <span className="text-[10px] font-bold text-metro-secondary uppercase tracking-wider block font-mono">Image Resource</span>
-                  
+
                   <div className="flex gap-2">
                     <input
                       type="file"
@@ -1297,7 +1286,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
         <div className="p-4 space-y-4 text-xs">
           <div className="space-y-2.5">
             <span className="text-[10px] font-bold text-metro-secondary uppercase tracking-wider block font-mono">Active Design</span>
-            
+
             <div>
               <label className="text-[9px] text-metro-secondary block mb-1">Label Layout Name</label>
               <input
@@ -1313,7 +1302,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             <span className="text-[10px] font-bold text-metro-secondary uppercase tracking-wider block font-mono">
               Label Dimensions ({getUnitSymbol(template.unit || 'mm')})
             </span>
-            
+
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[9px] text-metro-secondary block mb-1">Width</label>
@@ -1375,7 +1364,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
             <span className="text-[10px] font-bold text-metro-secondary uppercase tracking-wider block font-mono">
               Page Internal Padding ({getUnitSymbol(template.unit || 'mm')})
             </span>
-            
+
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[9px] text-metro-secondary block mb-1">Left</label>
@@ -1427,7 +1416,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               </div>
             </div>
           </div>
-          
+
           <div className="space-y-2.5 pt-3 border-t border-metro-border">
             <div>
               <label className="text-[9px] text-metro-secondary block mb-1">Primary Key Identifier</label>

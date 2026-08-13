@@ -1821,7 +1821,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         {el.type === "text" && (() => {
           const wrapEnabled = (el as any).wrapText === true;
           const baseFontSizePx = (el.fontSize || 10) * (25.4 / 72.0) * mmToPx;
-          const finalFontSizePx = (el.autoShrink || el.smartFit)
+          const finalFontSizePx = (el.autoShrink || el.smartFit || el.autoExpand)
             ? getAutoShrunkWrappedFontSize(
                 renderedText,
                 el.fontFamily || "Segoe UI",
@@ -1832,7 +1832,8 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                 el.fontWeight,
                 el.fontStyle,
                 el.smartFit,
-                el.autoShrink
+                el.autoShrink,
+                el.autoExpand
               )
             : baseFontSizePx;
 
@@ -1847,9 +1848,9 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                 fontWeight: el.fontWeight || "normal",
                 fontStyle: el.fontStyle || "normal",
                 color: el.textColor || "#000000",
-                lineHeight: isIndic ? 1.48 : 1.28,
-                paddingTop: isIndic ? "2px" : "0px",
-                paddingBottom: isIndic ? "2px" : "0px",
+                lineHeight: isIndic ? 1.65 : 1.30,
+                paddingTop: isIndic ? "3px" : "0px",
+                paddingBottom: isIndic ? "3px" : "0px",
                 whiteSpace: wrapEnabled ? "pre-wrap" : "nowrap",
                 wordBreak: wrapEnabled ? "break-word" : "normal",
                 width: wrapEnabled ? "100%" : "max-content",
