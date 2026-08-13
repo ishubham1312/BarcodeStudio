@@ -417,23 +417,23 @@ export async function getRecordByUniqueField(
       const db = new sqlite3.Database(targetPath, sqlite3.OPEN_READONLY);
       const safeTable = tableName.replace(/[^a-zA-Z0-9_]/g, "");
       const safeField = uniqueField.replace(/[^a-zA-Z0-9_]/g, "");
-      // Try exact match first, then partial match (LIKE) for better search behavior
-      db.get(`SELECT * FROM "${safeTable}" WHERE CAST("${safeField}" AS TEXT) = ?`, [value], (err, row) => {
-        if (err || !row) {
-          if (err) console.error("[SQLite query-record exact]", err.message);
-          db.get(`SELECT * FROM "${safeTable}" WHERE CAST("${safeField}" AS TEXT) LIKE ?`, [`%${value}%`], (err2, row2) => {
-            db.close();
-            if (err2) console.error("[SQLite query-record like]", err2.message);
-            if (err2 || !row2) {
-              resolve(null);
-            } else {
-              resolve(row2);
-            }
-          });
-        } else {
+      // Fast path: direct equality check (uses column index if present)
+      db.get(`SELECT * FROM "${safeTable}" WHERE "${safeField}" = ? LIMIT 1`, [value], (err, row) => {
+        if (!err && row) {
           db.close();
-          resolve(row);
+          return resolve(row);
         }
+        // Fallback: CAST comparison or LIKE prefix
+        db.get(`SELECT * FROM "${safeTable}" WHERE CAST("${safeField}" AS TEXT) = ? LIMIT 1`, [value], (err2, row2) => {
+          if (!err2 && row2) {
+            db.close();
+            return resolve(row2);
+          }
+          db.get(`SELECT * FROM "${safeTable}" WHERE "${safeField}" LIKE ? LIMIT 1`, [`${value}%`], (err3, row3) => {
+            db.close();
+            resolve(row3 || null);
+          });
+        });
       });
     });
   }
@@ -449,19 +449,19 @@ export async function getRecordByUniqueField(
     try {
       const safeTable = connection.escapeId(tableName);
       const safeField = connection.escapeId(uniqueField);
-      // Use CAST for flexible comparison — column may be numeric
+      // Fast path: direct column index equality
       const [rows]: any[] = await connection.query(
+        `SELECT * FROM ${safeTable} WHERE ${safeField} = ? LIMIT 1`, [value]
+      );
+      if (rows && rows.length > 0) {
+        await connection.end();
+        return rows[0];
+      }
+      const [rows2]: any[] = await connection.query(
         `SELECT * FROM ${safeTable} WHERE CAST(${safeField} AS CHAR) = ? LIMIT 1`, [value]
       );
-      if (rows.length === 0) {
-        const [rows2]: any[] = await connection.query(
-          `SELECT * FROM ${safeTable} WHERE CAST(${safeField} AS CHAR) LIKE ? LIMIT 1`, [`%${value}%`]
-        );
-        await connection.end();
-        return rows2.length > 0 ? rows2[0] : null;
-      }
       await connection.end();
-      return rows[0];
+      return rows2 && rows2.length > 0 ? rows2[0] : null;
     } catch (err: any) {
       console.error("[MySQL query-record]", err.message);
       await connection.end().catch(() => {});
@@ -479,7 +479,8 @@ export async function getRecordByUniqueField(
       options: {
         encrypt: encrypt === true || encrypt === "true",
         trustServerCertificate: trustCert === true || trustCert === "true",
-        enableArithAbort: true
+        enableArithAbort: true,
+        connectTimeout: 3000
       }
     };
     if (instance) {
@@ -488,22 +489,24 @@ export async function getRecordByUniqueField(
     let pool: any;
     try {
       pool = await mssql.connect(sqlConfig);
-      // Keep dots for schema-qualified names, strip everything else
       const cleanTable = tableName.replace(/[^a-zA-Z0-9_\.]/g, "");
-      // Bracket-quote the field name for proper MSSQL identifier escaping
       const safeField = uniqueField.replace(/[^a-zA-Z0-9_]/g, "");
 
-      // Use CAST to NVARCHAR for comparison — handles numeric, int, varchar columns uniformly
+      // Fast path 1: direct index query
       let result = await pool.request()
         .input('val', mssql.NVarChar, value)
-        .query(`SELECT TOP 1 * FROM ${cleanTable} WHERE CAST([${safeField}] AS NVARCHAR(MAX)) = @val`);
+        .query(`SELECT TOP 1 * FROM ${cleanTable} WHERE [${safeField}] = @val`);
       
-      if (result.recordset.length === 0) {
-        // Fallback: partial match with LIKE
-        result = await pool.request()
-          .input('val', mssql.NVarChar, `%${value}%`)
-          .query(`SELECT TOP 1 * FROM ${cleanTable} WHERE CAST([${safeField}] AS NVARCHAR(MAX)) LIKE @val`);
+      if (result.recordset.length > 0) {
+        await pool.close();
+        return result.recordset[0];
       }
+
+      // Fast path 2: CAST equality query
+      result = await pool.request()
+        .input('val', mssql.NVarChar, value)
+        .query(`SELECT TOP 1 * FROM ${cleanTable} WHERE CAST([${safeField}] AS NVARCHAR(MAX)) = @val`);
+
       await pool.close();
       return result.recordset.length > 0 ? result.recordset[0] : null;
     } catch (err: any) {

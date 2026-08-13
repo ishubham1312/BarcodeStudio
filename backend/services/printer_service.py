@@ -568,13 +568,11 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
   width_px  = max(1, int(round(width_mm  * pixels_per_mm)))
   height_px = max(1, int(round(height_mm * pixels_per_mm)))
 
-  # Internal safe margin padding (1.5mm) matching ZPL driver standard
-  safe_margin_mm = 1.5
-  safe_margin_px = int(round(safe_margin_mm * pixels_per_mm))
-  min_x_px = safe_margin_px
-  max_x_px = max(min_x_px + 1, width_px - safe_margin_px)
-  min_y_px = safe_margin_px
-  max_y_px = max(min_y_px + 1, height_px - safe_margin_px)
+  # Exact 1:1 millimeter bounds matching canvas coordinate space
+  min_x_px = 0
+  max_x_px = width_px
+  min_y_px = 0
+  max_y_px = height_px
 
   bg_color = "black" if negative else "white"
   image = Image.new("RGB", (width_px, height_px), bg_color)
@@ -599,16 +597,16 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
     el_w = el.get("width", 10)
     el_h = el.get("height", 10)
 
-    # Dimensions conversion with 1.5mm internal padding margin
+    # Exact 1:1 dimension conversion from mm to pixels
     raw_x = int(round(el_x * pixels_per_mm))
     raw_y = int(round(el_y * pixels_per_mm))
     raw_w = int(round(el_w * pixels_per_mm))
     raw_h = int(round(el_h * pixels_per_mm))
 
-    x = max(min_x_px, min(raw_x, max_x_px - 1))
-    y = max(min_y_px, min(raw_y, max_y_px - 1))
-    w = max(1, min(raw_w, max_x_px - x))
-    h = max(1, min(raw_h, max_y_px - y))
+    x = max(0, min(raw_x, width_px - 1))
+    y = max(0, min(raw_y, height_px - 1))
+    w = max(1, min(raw_w, width_px - x))
+    h = max(1, min(raw_h, height_px - y))
     el_type = el.get("type")
     
     temp_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -745,6 +743,7 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
 
       wrap_text = el.get("wrapText", False)
       auto_shrink = el.get("autoShrink", False)
+      smart_fit = el.get("smartFit", False)
       
       # Wrap text helper function — handles both space-separated (Latin) and
       # character-level (Indic/CJK/Arabic) scripts
@@ -816,13 +815,38 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
 
       if wrap_text:
         min_size_px = int(round(4.0 * (dpi / 72.0)))
+        boost_px = max(1, int(round(2.0 * (dpi / 72.0))))
+        if smart_fit:
+          base_font = _load_font(font_size_px)
+          base_lines = wrap_text_pil(text, base_font, max(1, w - 4))
+          base_line_count = len(base_lines)
+          base_line_h_px = base_font.getbbox("A")[3] - base_font.getbbox("A")[1] if hasattr(base_font, 'getbbox') else font_size_px
+          base_tot_h_mm = base_line_count * (base_line_h_px / pixels_per_mm * 1.25)
+          base_max_w_px = max(base_font.getlength(l) if hasattr(base_font, 'getlength') else (base_font.getbbox(l)[2] - base_font.getbbox(l)[0] if hasattr(base_font, 'getbbox') else len(l) * 8) for l in base_lines) if base_lines else 0
+          if base_tot_h_mm <= el_h and base_max_w_px <= max(1, w - 4):
+            for frac in [1.0, 0.75, 0.5, 0.25]:
+              cand_size = font_size_px + max(1, int(round(boost_px * frac)))
+              cand_font = _load_font(cand_size)
+              cand_lines = wrap_text_pil(text, cand_font, max(1, w - 4))
+              if len(cand_lines) > base_line_count:
+                continue
+              cand_line_h_px = cand_font.getbbox("A")[3] - cand_font.getbbox("A")[1] if hasattr(cand_font, 'getbbox') else cand_size
+              cand_tot_h_mm = len(cand_lines) * (cand_line_h_px / pixels_per_mm * 1.25)
+              cand_max_w_px = max(cand_font.getlength(l) if hasattr(cand_font, 'getlength') else (cand_font.getbbox(l)[2] - cand_font.getbbox(l)[0] if hasattr(cand_font, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
+              if cand_tot_h_mm <= el_h and cand_max_w_px <= max(1, w - 4):
+                font_size_px = cand_size
+                break
+
+        is_indic_text = any((0x0900 <= ord(c) <= 0x0D7F) or (0x0600 <= ord(c) <= 0x06FF) for c in (text or ""))
+        line_spacing_ratio = 0.48 if is_indic_text else 0.28
+
         # Reduce font size until text lines fit within max_w AND el_h
         while font_size_px > min_size_px:
           font = _load_font(font_size_px)
           lines_to_draw = wrap_text_pil(text, font, max(1, w - 4))
           line_h_px = font.getbbox("A")[3] - font.getbbox("A")[1] if hasattr(font, 'getbbox') else font_size_px
           line_h_mm = line_h_px / pixels_per_mm
-          line_spacing_mm = line_h_mm * 0.25
+          line_spacing_mm = line_h_mm * line_spacing_ratio
           line_height_total_mm = line_h_mm + line_spacing_mm
           total_text_h_mm = len(lines_to_draw) * line_height_total_mm - line_spacing_mm
           max_line_w_px = max(font.getlength(l) if hasattr(font, 'getlength') else (font.getbbox(l)[2] - font.getbbox(l)[0] if hasattr(font, 'getbbox') else len(l) * 8) for l in lines_to_draw) if lines_to_draw else 0
@@ -844,7 +868,7 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
           line_h_px = font_size_px
 
         line_h_mm = line_h_px / pixels_per_mm
-        line_spacing_mm = line_h_mm * 0.25
+        line_spacing_mm = line_h_mm * line_spacing_ratio
         line_height_total_mm = line_h_mm + line_spacing_mm
         total_text_h_mm = len(lines_to_draw) * line_height_total_mm - line_spacing_mm
 
@@ -885,6 +909,33 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
         # Auto-adjust font size so single-line text NEVER overflows element width or height
         min_size = max(4, int(round(4.0 * (dpi / 72.0))))
         max_allowed_w_px = max(10, min(w - 4, width_px - x - 1))
+        boost_px = max(1, int(round(2.0 * (dpi / 72.0))))
+
+        if smart_fit:
+          base_font = _load_font(font_size_px)
+          if hasattr(temp_draw, 'textbbox'):
+            b = temp_draw.textbbox((0, 0), text, font=base_font)
+            bw, bh = b[2] - b[0], b[3] - b[1]
+          elif hasattr(base_font, 'getbbox'):
+            b = base_font.getbbox(text)
+            bw, bh = b[2] - b[0], b[3] - b[1]
+          else:
+            bw, bh = len(text) * 8, font_size_px
+          if bw <= max_allowed_w_px and (bh / pixels_per_mm) <= el_h:
+            for frac in [1.0, 0.75, 0.5, 0.25]:
+              cand_size = font_size_px + max(1, int(round(boost_px * frac)))
+              cand_font = _load_font(cand_size)
+              if hasattr(temp_draw, 'textbbox'):
+                cb = temp_draw.textbbox((0, 0), text, font=cand_font)
+                cw, ch = cb[2] - cb[0], cb[3] - cb[1]
+              elif hasattr(cand_font, 'getbbox'):
+                cb = cand_font.getbbox(text)
+                cw, ch = cb[2] - cb[0], cb[3] - cb[1]
+              else:
+                cw, ch = len(text) * 8, cand_size
+              if cw <= max_allowed_w_px and (ch / pixels_per_mm) <= el_h:
+                font_size_px = cand_size
+                break
 
         while font_size_px > min_size:
           font = _load_font(font_size_px)
@@ -929,9 +980,9 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
           raw_x = last_text_end_x_px + spacing_gap_px
           x = max(min_x_px, min(raw_x, max_x_px - 1))
 
-        # Center vertically and align horizontally inside the element box using mm coordinates with 1.5mm internal padding offset
-        pad_x_mm = max(safe_margin_mm, el_x)
-        pad_y_mm = max(safe_margin_mm, el_y)
+        # Center vertically and align horizontally inside the element box using mm coordinates
+        pad_x_mm = max(0.0, el_x)
+        pad_y_mm = max(0.0, el_y)
         if text_align == "center":
           draw_cx_mm = pad_x_mm + el_w / 2.0
         elif text_align == "right":

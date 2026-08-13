@@ -1050,6 +1050,22 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                       </span>
                     </label>
 
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedElement.smartFit === true}
+                        onChange={e => {
+                          onUpdateElement(selectedElement.id, {
+                            smartFit: e.target.checked
+                          });
+                        }}
+                        className="rounded border-metro-border text-metro-accent focus:ring-0 bg-metro-input w-4 h-4 cursor-pointer"
+                      />
+                      <span className="text-[11px] text-metro-primary font-semibold" title="Dynamically scales up font size (up to +2px) for short text content to fill empty container space while preserving layout boundaries">
+                        Smart Fit
+                      </span>
+                    </label>
+
                     {selectedElement.type === 'text' && (
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input

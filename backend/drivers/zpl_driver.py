@@ -215,6 +215,7 @@ def _render_text_element_to_pil(el: Dict[str, Any], text: str, w_dots: int, h_do
     text_align = str(el.get("textAlign", "left")).lower()
     wrap_text = bool(el.get("wrapText", False))
     auto_shrink = bool(el.get("autoShrink", False))
+    smart_fit = bool(el.get("smartFit", False))
 
     font_size_px = int(round(font_size_pt * (dpi / 72.0)))
     font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
@@ -306,6 +307,30 @@ def _render_text_element_to_pil(el: Dict[str, Any], text: str, w_dots: int, h_do
 
     if wrap_text:
         min_size_px = max(4, int(round(4.0 * (dpi / 72.0))))
+        boost_px = max(1, int(round(2.0 * (dpi / 72.0))))
+        if smart_fit:
+            base_font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
+            base_lines = wrap_text_pil(text, base_font, max(1, w_px - 4))
+            base_line_count = len(base_lines)
+            base_line_h_px = base_font.getbbox("A")[3] - base_font.getbbox("A")[1] if hasattr(base_font, 'getbbox') else font_size_px
+            base_line_spacing_px = max(1, int(base_line_h_px * 0.25))
+            base_tot_h = base_line_count * (base_line_h_px + base_line_spacing_px) - base_line_spacing_px
+            base_max_line_w = max(_measure_str(l, base_font) for l in base_lines) if base_lines else 0
+            if base_tot_h <= h_px and base_max_line_w <= max(1, w_px - 4):
+                for frac in [1.0, 0.75, 0.5, 0.25]:
+                    cand_size = font_size_px + max(1, int(round(boost_px * frac)))
+                    cand_font = _get_font_for_text(font_family, bold, italic, text, cand_size)
+                    cand_lines = wrap_text_pil(text, cand_font, max(1, w_px - 4))
+                    if len(cand_lines) > base_line_count:
+                        continue
+                    cand_line_h_px = cand_font.getbbox("A")[3] - cand_font.getbbox("A")[1] if hasattr(cand_font, 'getbbox') else cand_size
+                    cand_line_spacing_px = max(1, int(cand_line_h_px * 0.25))
+                    cand_tot_h = len(cand_lines) * (cand_line_h_px + cand_line_spacing_px) - cand_line_spacing_px
+                    cand_max_line_w = max(_measure_str(l, cand_font) for l in cand_lines) if cand_lines else 0
+                    if cand_tot_h <= h_px and cand_max_line_w <= max(1, w_px - 4):
+                        font_size_px = cand_size
+                        break
+
         while font_size_px > min_size_px:
             font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
             lines = wrap_text_pil(text, font, max(1, w_px - 4))
@@ -345,6 +370,21 @@ def _render_text_element_to_pil(el: Dict[str, Any], text: str, w_dots: int, h_do
     else:
         # Auto-adjust font size so single-line text fits element width & height
         min_size_px = max(4, int(round(4.0 * (dpi / 72.0))))
+        boost_px = max(1, int(round(2.0 * (dpi / 72.0))))
+        if smart_fit:
+            base_font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
+            base_tw = _measure_str(text, base_font)
+            base_th = base_font.getbbox("A")[3] - base_font.getbbox("A")[1] if hasattr(base_font, 'getbbox') else font_size_px
+            if base_tw <= max(1, w_px - 4) and base_th <= h_px:
+                for frac in [1.0, 0.75, 0.5, 0.25]:
+                    cand_size = font_size_px + max(1, int(round(boost_px * frac)))
+                    cand_font = _get_font_for_text(font_family, bold, italic, text, cand_size)
+                    cand_tw = _measure_str(text, cand_font)
+                    cand_th = cand_font.getbbox("A")[3] - cand_font.getbbox("A")[1] if hasattr(cand_font, 'getbbox') else cand_size
+                    if cand_tw <= max(1, w_px - 4) and cand_th <= h_px:
+                        font_size_px = cand_size
+                        break
+
         while font_size_px > min_size_px:
             font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
             tw = _measure_str(text, font)

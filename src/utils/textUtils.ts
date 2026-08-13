@@ -1,6 +1,10 @@
+const fontSizeCache = new Map<string, number>();
+const MAX_CACHE_SIZE = 1500;
+
 /**
  * Smartly calculates font size for a text element so that it fits
- * within specified maximum width and height (supporting word wrapping and multi-line paragraphs).
+ * within specified maximum width and height (supporting word wrapping and multi-line paragraphs),
+ * and optionally scales up font size by up to +2px (Smart Fit) when text is short.
  */
 export function getAutoShrunkWrappedFontSize(
   text: string,
@@ -10,116 +14,182 @@ export function getAutoShrunkWrappedFontSize(
   maxHeightPx: number,
   wrapText: boolean,
   fontWeight?: string,
-  fontStyle?: string
+  fontStyle?: string,
+  smartFit?: boolean,
+  autoShrink?: boolean
 ): number {
   if (!text || maxWidthPx <= 0 || initialFontSizePx <= 0) return initialFontSizePx;
 
-  let canvas = (getAutoShrunkFontSize as any)._canvas;
-  if (!canvas) {
-    if (typeof document !== "undefined") {
-      canvas = document.createElement("canvas");
-      (getAutoShrunkFontSize as any)._canvas = canvas;
-    } else {
-      return initialFontSizePx;
-    }
+  // Memoization lookup for 60fps canvas performance
+  const cacheKey = `${text}_${fontFamily}_${initialFontSizePx}_${maxWidthPx}_${maxHeightPx}_${wrapText ? 1 : 0}_${fontWeight || ''}_${fontStyle || ''}_${smartFit ? 1 : 0}_${autoShrink ? 1 : 0}`;
+  const cachedVal = fontSizeCache.get(cacheKey);
+  if (cachedVal !== undefined) {
+    return cachedVal;
   }
 
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return initialFontSizePx;
-
-  // Account for px-1 container padding (4px left + 4px right = 8px)
-  const maxAllowedWidth = Math.max(1, maxWidthPx - 8);
-  const maxAllowedHeight = maxHeightPx > 0 ? Math.max(1, maxHeightPx - 4) : 0;
-  const minFontSize = 4;
-
-  const measureWidth = (str: string, size: number): number => {
-    ctx.font = `${fontStyle || "normal"} ${fontWeight || "normal"} ${size}px "${fontFamily}", "Segoe UI", system-ui, sans-serif`;
-    return ctx.measureText(str).width;
-  };
-
-  // Helper to split text into wrapped lines respecting paragraphs (\n) and long words
-  const getWrappedLines = (str: string, size: number): string[] => {
-    const rawParagraphs = str.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-    if (!wrapText) return rawParagraphs.length > 0 ? rawParagraphs : [str];
-
-    const lines: string[] = [];
-
-    for (const para of rawParagraphs) {
-      if (!para) {
-        lines.push("");
-        continue;
+  const computeFontSize = (): number => {
+    let canvas = (getAutoShrunkFontSize as any)._canvas;
+    if (!canvas) {
+      if (typeof document !== "undefined") {
+        canvas = document.createElement("canvas");
+        (getAutoShrunkFontSize as any)._canvas = canvas;
+      } else {
+        return initialFontSizePx;
       }
+    }
 
-      const words = para.split(" ");
-      let currentLine = "";
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return initialFontSizePx;
 
-      for (let i = 0; i < words.length; i++) {
-        const word = words[i];
-        const testLine = currentLine ? `${currentLine} ${word}` : word;
+    // Account for px-1 container padding (4px left + 4px right = 8px)
+    const maxAllowedWidth = Math.max(1, maxWidthPx - 8);
+    const maxAllowedHeight = maxHeightPx > 0 ? Math.max(1, maxHeightPx - 4) : 0;
+    const minFontSize = 4;
 
-        if (measureWidth(testLine, size) <= maxAllowedWidth) {
-          currentLine = testLine;
-        } else {
-          if (currentLine) {
-            lines.push(currentLine);
-            currentLine = "";
-          }
+    const measureWidth = (str: string, size: number): number => {
+      ctx.font = `${fontStyle || "normal"} ${fontWeight || "normal"} ${size}px "${fontFamily}", "Segoe UI", system-ui, sans-serif`;
+      return ctx.measureText(str).width;
+    };
 
-          // If the word itself is wider than maxAllowedWidth, break character by character
-          if (measureWidth(word, size) > maxAllowedWidth) {
-            let part = "";
-            for (let c = 0; c < word.length; c++) {
-              const char = word[c];
-              if (measureWidth(part + char, size) <= maxAllowedWidth) {
-                part += char;
-              } else {
-                if (part) lines.push(part);
-                part = char;
-              }
-            }
-            if (part) currentLine = part;
+    // Helper to split text into wrapped lines respecting paragraphs (\n) and long words
+    const getWrappedLines = (str: string, size: number): string[] => {
+      const rawParagraphs = str.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+      if (!wrapText) return rawParagraphs.length > 0 ? rawParagraphs : [str];
+
+      const lines: string[] = [];
+
+      for (const para of rawParagraphs) {
+        if (!para) {
+          lines.push("");
+          continue;
+        }
+
+        const words = para.split(" ");
+        let currentLine = "";
+
+        for (let i = 0; i < words.length; i++) {
+          const word = words[i];
+          const testLine = currentLine ? `${currentLine} ${word}` : word;
+
+          if (measureWidth(testLine, size) <= maxAllowedWidth) {
+            currentLine = testLine;
           } else {
-            currentLine = word;
+            if (currentLine) {
+              lines.push(currentLine);
+              currentLine = "";
+            }
+
+            // If the word itself is wider than maxAllowedWidth, break character by character
+            if (measureWidth(word, size) > maxAllowedWidth) {
+              let part = "";
+              for (let c = 0; c < word.length; c++) {
+                const char = word[c];
+                if (measureWidth(part + char, size) <= maxAllowedWidth) {
+                  part += char;
+                } else {
+                  if (part) lines.push(part);
+                  part = char;
+                }
+              }
+              if (part) currentLine = part;
+            } else {
+              currentLine = word;
+            }
           }
         }
+        if (currentLine) lines.push(currentLine);
       }
-      if (currentLine) lines.push(currentLine);
+
+      return lines.length > 0 ? lines : [str];
+    };
+
+    const isIndic = /[\u0900-\u0D7F\u0600-\u06FF]/.test(text);
+    const lineSpacingMultiplier = isIndic ? 1.48 : 1.28;
+
+    // 1. Smart Fit scaling UP logic (dynamically boost font size for short text)
+    if (smartFit) {
+      const baseLines = getWrappedLines(text, initialFontSizePx);
+      const baseLineCount = baseLines.length;
+      let baseFitsWidth = true;
+      for (const line of baseLines) {
+        if (measureWidth(line, initialFontSizePx) > maxAllowedWidth) {
+          baseFitsWidth = false;
+          break;
+        }
+      }
+      const baseTotalHeight = baseLineCount * initialFontSizePx * lineSpacingMultiplier;
+      const baseFitsHeight = maxAllowedHeight <= 0 || baseTotalHeight <= maxAllowedHeight;
+
+      if (baseFitsWidth && baseFitsHeight) {
+        const candidates = [4.0, 3.0, 2.5, 2.0, 1.5, 1.0, 0.5];
+        for (const boost of candidates) {
+          const candidateSize = initialFontSizePx + boost;
+          const candLines = getWrappedLines(text, candidateSize);
+
+          // Guardrail 1: Scaled font size MUST NOT cause extra line wraps
+          if (candLines.length > baseLineCount) continue;
+
+          // Guardrail 2: Scaled font size MUST NOT exceed horizontal bounds
+          let candFitsWidth = true;
+          for (const line of candLines) {
+            if (measureWidth(line, candidateSize) > maxAllowedWidth) {
+              candFitsWidth = false;
+              break;
+            }
+          }
+          if (!candFitsWidth) continue;
+
+          // Guardrail 3: Scaled font size MUST NOT exceed vertical container bounds
+          const candTotalHeight = candLines.length * candidateSize * lineSpacingMultiplier;
+          if (maxAllowedHeight > 0 && candTotalHeight > maxAllowedHeight) continue;
+
+          // Candidate passed all guardrails! Return scaled up font size.
+          return candidateSize;
+        }
+      }
     }
 
-    return lines.length > 0 ? lines : [str];
+    // 2. Standard step-down auto-shrink logic if text exceeds box size and autoShrink is enabled
+    if (autoShrink !== false) {
+      let fontSize = initialFontSizePx;
+      while (fontSize > minFontSize) {
+        const lines = getWrappedLines(text, fontSize);
+        const lineHeight = fontSize * lineSpacingMultiplier;
+        const totalHeight = lines.length * lineHeight;
+
+        let fitsWidth = true;
+        for (const line of lines) {
+          if (measureWidth(line, fontSize) > maxAllowedWidth) {
+            fitsWidth = false;
+            break;
+          }
+        }
+
+        const fitsHeight = maxAllowedHeight <= 0 || totalHeight <= maxAllowedHeight;
+
+        if (fitsWidth && fitsHeight) {
+          break;
+        }
+
+        fontSize -= 0.5;
+      }
+      return Math.max(minFontSize, fontSize);
+    }
+
+    return initialFontSizePx;
   };
 
-  let fontSize = initialFontSizePx;
-
-  // Step down font size until all wrapped lines fit horizontally & vertically
-  while (fontSize > minFontSize) {
-    const lines = getWrappedLines(text, fontSize);
-    const lineSpacingMultiplier = 1.25;
-    const lineHeight = fontSize * lineSpacingMultiplier;
-    const totalHeight = lines.length * lineHeight;
-
-    let fitsWidth = true;
-    for (const line of lines) {
-      if (measureWidth(line, fontSize) > maxAllowedWidth) {
-        fitsWidth = false;
-        break;
-      }
-    }
-
-    const fitsHeight = maxAllowedHeight <= 0 || totalHeight <= maxAllowedHeight;
-
-    if (fitsWidth && fitsHeight) {
-      break;
-    }
-
-    fontSize -= 0.5;
+  const calculatedSize = computeFontSize();
+  if (fontSizeCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = fontSizeCache.keys().next().value;
+    if (firstKey) fontSizeCache.delete(firstKey);
   }
-
-  return Math.max(minFontSize, fontSize);
+  fontSizeCache.set(cacheKey, calculatedSize);
+  return calculatedSize;
 }
 
 /**
- * Single-line font size auto-shrink calculation.
+ * Single-line font size auto-shrink / smart-fit calculation.
  */
 export function getAutoShrunkFontSize(
   text: string,
@@ -127,7 +197,8 @@ export function getAutoShrunkFontSize(
   initialFontSizePx: number,
   maxWidthPx: number,
   fontWeight?: string,
-  fontStyle?: string
+  fontStyle?: string,
+  smartFit?: boolean
 ): number {
   return getAutoShrunkWrappedFontSize(
     text,
@@ -137,6 +208,7 @@ export function getAutoShrunkFontSize(
     0,
     false,
     fontWeight,
-    fontStyle
+    fontStyle,
+    smartFit
   );
 }

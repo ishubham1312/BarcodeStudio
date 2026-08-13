@@ -504,20 +504,29 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
       clean_table = f"[{table_name}]"
 
     # ----------------------------------------------------------------
-    # Step 1: Discover all actual columns in this table.
-    # This lets us auto-correct a wrong uniqueField and avoid
-    # the "Invalid column name" SQL error.
+    # Fast Path: Execute direct indexed query first for instant response
+    # ----------------------------------------------------------------
+    if unique_field:
+      safe_field = unique_field.replace("[", "").replace("]", "")
+      try:
+        cursor.execute(f"SELECT TOP 1 * FROM {clean_table} WHERE [{safe_field}] = ?", (value,))
+        row = cursor.fetchone()
+        if row:
+          columns = [col[0] for col in cursor.description]
+          res = {columns[idx]: ("" if val is None else str(val)) for idx, val in enumerate(row)}
+          conn.close()
+          return res
+      except Exception:
+        pass
+
+    # ----------------------------------------------------------------
+    # Step 1: Discover all actual columns in this table (fallback).
     # ----------------------------------------------------------------
     try:
-      # Parse schema/table from clean_table for the query
-      schema_name = "dbo"
       raw_table = table_name
       if "." in table_name:
         parts = table_name.replace("[", "").replace("]", "").split(".")
-        if len(parts) == 2:
-          schema_name, raw_table = parts[0], parts[1]
-        else:
-          raw_table = parts[-1]
+        raw_table = parts[-1]
 
       cursor.execute(
         "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
@@ -539,11 +548,9 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
     resolved_field = None
 
     if unique_field and actual_columns:
-      # Exact match
       if unique_field in actual_columns:
         resolved_field = unique_field
       else:
-        # Case-insensitive match
         uf_lower = unique_field.lower()
         for col in actual_columns:
           if col.lower() == uf_lower:
@@ -551,7 +558,6 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
             break
 
     if not resolved_field and actual_columns:
-      # Auto-detect accession-like column by checking common name patterns
       ACCESSION_HINTS = [
         "acc_no", "accno", "accession", "accessionno", "accession_no",
         "accession_number", "accessionnumber", "acc", "barcode",
@@ -567,17 +573,10 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
           break
 
     if not resolved_field:
-      # Last resort: use whatever the caller provided, may still fail
       resolved_field = unique_field or (actual_columns[0] if actual_columns else "id")
 
-    logger.debug(
-      f"[db_service] MSSQL lookup: table='{clean_table}' "
-      f"requested='{unique_field}' resolved='{resolved_field}' value='{value}'"
-    )
-
     # ----------------------------------------------------------------
-    # Step 3: Execute the query with the resolved column name.
-    # Use simple equality first, LIKE as fallback.
+    # Step 3: Execute query with resolved column name.
     # ----------------------------------------------------------------
     try:
       cursor.execute(
@@ -608,6 +607,11 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
         f"[db_service] MSSQL query failed for table='{clean_table}' "
         f"field='{resolved_field}' value='{value}': {query_err}"
       )
+      try:
+        conn.close()
+      except Exception:
+        pass
+      return None
       try:
         conn.close()
       except Exception:

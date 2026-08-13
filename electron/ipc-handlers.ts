@@ -8,6 +8,12 @@ import { execFile, exec } from 'child_process';
 import { getPythonPort } from './python-bridge';
 import { encrypt, decrypt } from './security';
 
+const httpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 50,
+  keepAliveMsecs: 10000,
+});
+
 function httpRequest(method: string, url: string, body?: unknown, timeout = 30000): Promise<any> {
   return new Promise((resolve, reject) => {
     const payload = body !== undefined ? JSON.stringify(body) : undefined;
@@ -19,6 +25,7 @@ function httpRequest(method: string, url: string, body?: unknown, timeout = 3000
       method,
       headers: { 'Content-Type': 'application/json', ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}) },
       timeout,
+      agent: httpAgent,
     };
     const req = http.request(options, (res) => {
       let data = '';
