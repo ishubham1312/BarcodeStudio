@@ -936,7 +936,7 @@ export default function App() {
   const checkCustomFonts = useCallback((t: LabelTemplate) => {
     const standardFonts = [
       "Arial", "Helvetica", "Times New Roman", "Courier New", "Verdana", "Georgia",
-      "Trebuchet MS", "Impact", "Comic Sans MS", "sans-serif", "serif", "nirmala", "nirmala-bold", "monospace",
+      "Trebuchet MS", "Impact", "Comic Sans MS", "sans-serif", "serif", "Noto Sans", "Noto Sans-bold", "monospace",
       "cursive", "system-ui", "Segoe UI", "Roboto", "Inter", "Outfit"
     ];
     const missingFonts: string[] = [];

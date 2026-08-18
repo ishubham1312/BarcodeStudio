@@ -442,27 +442,60 @@ def get_preview_rows(config: Dict[str, Any], table_name: str, limit: int = 100) 
 def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_field: str, value: str) -> Optional[Dict[str, Any]]:
   db_type = config.get("dbType")
   database = config.get("database")
-  
+  val_clean = str(value).strip() if value is not None else ""
+  if not val_clean:
+    return None
+
+  ACCESSION_HINTS = [
+    "acc_no", "accno", "accession", "accessionno", "accession_no",
+    "accession_number", "accessionnumber", "acc", "barcode",
+    "book_no", "bookno", "item_id", "itemid", "id", "code",
+    "serial", "serial_no", "serialno"
+  ]
+
   if db_type == "sqlite":
     sqlite_path = config.get("sqlitePath")
     conn = get_sqlite_conn(sqlite_path)
     cursor = conn.cursor()
     safe_table = "".join(c for c in table_name if c.isalnum() or c in '_')
     safe_field = "".join(c for c in unique_field if c.isalnum() or c in '_')
-    
-    # Try exact match first
-    cursor.execute(f'SELECT * FROM "{safe_table}" WHERE CAST("{safe_field}" AS TEXT) = ?', (value,))
-    row = cursor.fetchone()
-    
-    # Fallback search matching LIKE %value%
-    if not row:
-      cursor.execute(f'SELECT * FROM "{safe_table}" WHERE CAST("{safe_field}" AS TEXT) LIKE ?', (f'%{value}%',))
+
+    # Get actual columns in table
+    try:
+      cursor.execute(f'PRAGMA table_info("{safe_table}")')
+      actual_cols = [row[1] for row in cursor.fetchall()]
+    except Exception:
+      actual_cols = []
+
+    fields_to_try = []
+    if safe_field:
+      fields_to_try.append(safe_field)
+    for col in actual_cols:
+      if col not in fields_to_try and any(col.lower() == h or col.lower().startswith(h) for h in ACCESSION_HINTS):
+        fields_to_try.append(col)
+
+    row = None
+    for fld in fields_to_try:
+      # 1. Exact match
+      cursor.execute(f'SELECT * FROM "{safe_table}" WHERE TRIM(CAST("{fld}" AS TEXT)) = ?', (val_clean,))
       row = cursor.fetchone()
-      
+      if row:
+        break
+      # 2. Prefix LIKE
+      cursor.execute(f'SELECT * FROM "{safe_table}" WHERE CAST("{fld}" AS TEXT) LIKE ?', (f'{val_clean}%',))
+      row = cursor.fetchone()
+      if row:
+        break
+      # 3. Contains LIKE
+      cursor.execute(f'SELECT * FROM "{safe_table}" WHERE CAST("{fld}" AS TEXT) LIKE ?', (f'%{val_clean}%',))
+      row = cursor.fetchone()
+      if row:
+        break
+
     res = dict(row) if row else None
     conn.close()
     return res
-    
+
   elif db_type == "mysql":
     conn = pymysql.connect(
       host=config.get("server", "localhost"),
@@ -475,20 +508,42 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
     )
     cursor = conn.cursor()
     safe_table = f"`{table_name}`"
-    safe_field = f"`{unique_field}`"
-    
-    # Try exact match first
-    cursor.execute(f"SELECT * FROM {safe_table} WHERE CAST({safe_field} AS CHAR) = %s LIMIT 1", (value,))
-    row = cursor.fetchone()
-    
-    # Fallback search matching LIKE %value%
-    if not row:
-      cursor.execute(f"SELECT * FROM {safe_table} WHERE CAST({safe_field} AS CHAR) LIKE %s LIMIT 1", (f'%{value}%',))
+
+    try:
+      cursor.execute(f"SHOW COLUMNS FROM {safe_table}")
+      actual_cols = [r['Field'] for r in cursor.fetchall()]
+    except Exception:
+      actual_cols = []
+
+    fields_to_try = []
+    if unique_field:
+      fields_to_try.append(unique_field)
+    for col in actual_cols:
+      if col not in fields_to_try and any(col.lower() == h or col.lower().startswith(h) for h in ACCESSION_HINTS):
+        fields_to_try.append(col)
+
+    row = None
+    for fld in fields_to_try:
+      safe_fld = f"`{fld}`"
+      # Exact match
+      cursor.execute(f"SELECT * FROM {safe_table} WHERE TRIM(CAST({safe_fld} AS CHAR)) = %s LIMIT 1", (val_clean,))
       row = cursor.fetchone()
-      
+      if row:
+        break
+      # Prefix LIKE
+      cursor.execute(f"SELECT * FROM {safe_table} WHERE CAST({safe_fld} AS CHAR) LIKE %s LIMIT 1", (f'{val_clean}%',))
+      row = cursor.fetchone()
+      if row:
+        break
+      # Contains LIKE
+      cursor.execute(f"SELECT * FROM {safe_table} WHERE CAST({safe_fld} AS CHAR) LIKE %s LIMIT 1", (f'%{val_clean}%',))
+      row = cursor.fetchone()
+      if row:
+        break
+
     conn.close()
     return row
-    
+
   elif db_type == "mssql":
     if not pyodbc:
       return None
@@ -496,122 +551,112 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
     conn = pyodbc.connect(conn_str, timeout=5)
     cursor = conn.cursor()
 
-    # Safely quote the table: if user provided [schema].[table], keep as-is;
-    # otherwise wrap in brackets to handle spaces and special chars.
     if '[' in table_name or '.' in table_name:
       clean_table = "".join(c for c in table_name if c.isalnum() or c in '_.[]')
     else:
       clean_table = f"[{table_name}]"
 
-    # ----------------------------------------------------------------
-    # Step 1: Discover all actual columns in this table.
-    # This lets us auto-correct a wrong uniqueField and avoid
-    # the "Invalid column name" SQL error.
-    # ----------------------------------------------------------------
+    # Step 1: Discover actual columns quickly via cursor description or schema
+    actual_columns: List[str] = []
     try:
-      # Parse schema/table from clean_table for the query
-      schema_name = "dbo"
-      raw_table = table_name
-      if "." in table_name:
-        parts = table_name.replace("[", "").replace("]", "").split(".")
-        if len(parts) == 2:
-          schema_name, raw_table = parts[0], parts[1]
-        else:
-          raw_table = parts[-1]
+      cursor.execute(f"SELECT TOP 1 * FROM {clean_table}")
+      if cursor.description:
+        actual_columns = [col[0] for col in cursor.description]
+    except Exception as desc_err:
+      logger.warning(f"[db_service] Could not query table '{clean_table}' directly: {desc_err}")
 
-      cursor.execute(
-        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
-        "WHERE TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-        (raw_table,)
-      )
-      actual_columns = [row[0] for row in cursor.fetchall()]
-    except Exception as col_err:
-      logger.warning(f"[db_service] Could not enumerate columns for '{table_name}': {col_err}")
-      actual_columns = []
+    if not actual_columns:
+      try:
+        raw_table = table_name.replace("[", "").replace("]", "").split(".")[-1]
+        cursor.execute(
+          "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+          "WHERE TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+          (raw_table,)
+        )
+        actual_columns = [r[0] for r in cursor.fetchall()]
+      except Exception:
+        actual_columns = []
 
-    # ----------------------------------------------------------------
-    # Step 2: Resolve the field to use, with smart fallback.
-    # Priority:
-    #   1. Exact case match for uniqueField
-    #   2. Case-insensitive match for uniqueField
-    #   3. Common accession/ID column name heuristics
-    # ----------------------------------------------------------------
-    resolved_field = None
+    # Step 2: Build prioritized list of fields to test
+    fields_to_try: List[str] = []
 
-    if unique_field and actual_columns:
-      # Exact match
-      if unique_field in actual_columns:
-        resolved_field = unique_field
-      else:
-        # Case-insensitive match
-        uf_lower = unique_field.lower()
-        for col in actual_columns:
-          if col.lower() == uf_lower:
-            resolved_field = col
-            break
-
-    if not resolved_field and actual_columns:
-      # Auto-detect accession-like column by checking common name patterns
-      ACCESSION_HINTS = [
-        "acc_no", "accno", "accession", "accessionno", "accession_no",
-        "accession_number", "accessionnumber", "acc", "barcode",
-        "book_no", "bookno", "item_id", "itemid", "id", "code",
-        "serial", "serial_no", "serialno"
-      ]
-      for hint in ACCESSION_HINTS:
-        for col in actual_columns:
-          if col.lower() == hint or col.lower().startswith(hint):
-            resolved_field = col
-            break
-        if resolved_field:
+    # 1. Exact match for requested unique_field
+    if unique_field:
+      for col in actual_columns:
+        if col.lower() == unique_field.lower():
+          if col not in fields_to_try:
+            fields_to_try.append(col)
           break
+      if unique_field not in fields_to_try:
+        fields_to_try.append(unique_field)
 
-    if not resolved_field:
-      # Last resort: use whatever the caller provided, may still fail
-      resolved_field = unique_field or (actual_columns[0] if actual_columns else "id")
+    # 2. Add common accession-like candidate columns present in the table
+    for col in actual_columns:
+      c_lower = col.lower()
+      if col not in fields_to_try and any(c_lower == hint or c_lower.startswith(hint) for hint in ACCESSION_HINTS):
+        fields_to_try.append(col)
+
+    if not fields_to_try and actual_columns:
+      fields_to_try.append(actual_columns[0])
 
     logger.debug(
-      f"[db_service] MSSQL lookup: table='{clean_table}' "
-      f"requested='{unique_field}' resolved='{resolved_field}' value='{value}'"
+      f"[db_service] MSSQL lookup: table='{clean_table}' fields_to_try={fields_to_try} value='{val_clean}'"
     )
 
-    # ----------------------------------------------------------------
-    # Step 3: Execute the query with the resolved column name.
-    # Use simple equality first, LIKE as fallback.
-    # ----------------------------------------------------------------
-    try:
-      cursor.execute(
-        f"SELECT TOP 1 * FROM {clean_table} WHERE [{resolved_field}] = ?",
-        (value,)
-      )
-      row = cursor.fetchone()
-
-      if not row:
+    row = None
+    for fld in fields_to_try:
+      try:
+        # 1. Exact equality match
         cursor.execute(
-          f"SELECT TOP 1 * FROM {clean_table} WHERE CAST([{resolved_field}] AS NVARCHAR(MAX)) LIKE ?",
-          (f"%{value}%",)
+          f"SELECT TOP 1 * FROM {clean_table} WHERE [{fld}] = ?",
+          (val_clean,)
         )
         row = cursor.fetchone()
+        if row:
+          break
 
-      res = None
-      if row:
-        columns = [col[0] for col in cursor.description]
-        res = {}
-        for idx, val in enumerate(row):
-          res[columns[idx]] = "" if val is None else str(val)
+        # 2. Trimmed string match (essential for CHAR(N) and NVARCHAR fields with whitespace)
+        cursor.execute(
+          f"SELECT TOP 1 * FROM {clean_table} WHERE LTRIM(RTRIM(CAST([{fld}] AS NVARCHAR(MAX)))) = ?",
+          (val_clean,)
+        )
+        row = cursor.fetchone()
+        if row:
+          break
 
+        # 3. Prefix match
+        cursor.execute(
+          f"SELECT TOP 1 * FROM {clean_table} WHERE CAST([{fld}] AS NVARCHAR(MAX)) LIKE ?",
+          (f"{val_clean}%",)
+        )
+        row = cursor.fetchone()
+        if row:
+          break
+
+        # 4. Contains match
+        cursor.execute(
+          f"SELECT TOP 1 * FROM {clean_table} WHERE CAST([{fld}] AS NVARCHAR(MAX)) LIKE ?",
+          (f"%{val_clean}%",)
+        )
+        row = cursor.fetchone()
+        if row:
+          break
+      except Exception as col_query_err:
+        logger.debug(f"[db_service] Query on column [{fld}] failed: {col_query_err}")
+        continue
+
+    res = None
+    if row:
+      columns = [col[0] for col in cursor.description]
+      res = {}
+      for idx, val in enumerate(row):
+        res[columns[idx]] = "" if val is None else str(val)
+
+    try:
       conn.close()
-      return res
+    except Exception:
+      pass
 
-    except Exception as query_err:
-      logger.error(
-        f"[db_service] MSSQL query failed for table='{clean_table}' "
-        f"field='{resolved_field}' value='{value}': {query_err}"
-      )
-      try:
-        conn.close()
-      except Exception:
-        pass
-      raise
+    return res
 
   return None

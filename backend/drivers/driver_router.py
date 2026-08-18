@@ -1,13 +1,5 @@
-"""
-driver_router.py - Selects the correct printer driver for a given printer name.
-
-Driver priority order:
-  1. TSPLDriver  - TSC/Kores thermal printers (USB, Network or Spool)
-  2. ZPLDriver   - Zebra printers (ZPL command direct raw)
-  3. EPLDriver   - Eltron/EPL printers (EPL command direct raw)
-  4. PDFDriver   - PDF print to file spools
-  5. GDIDriver   - All other Windows printers (rasterized GDI fallback)
-"""
+import sys
+import importlib
 from typing import Any, Dict, Type
 
 try:
@@ -33,15 +25,6 @@ logger = get_logger()
 # Driver registry - ordered by specificity (most specific first)
 # -----------------------------------------------------------------------------
 
-DRIVER_PRIORITY: list[Type[PrinterDriverInterface]] = [
-    TSPLDriver,   # TSC/Kores TSPL
-    ZPLDriver,    # Zebra ZPL
-    EPLDriver,    # Eltron EPL
-    PDFDriver,    # PDF virtual printer
-    GDIDriver,    # Windows GDI fallback
-]
-
-
 def get_driver(printer_name: str, native_mode: bool = True, force_gdi: bool = False) -> PrinterDriverInterface:
     """
     Return the most appropriate driver instance for the named printer.
@@ -53,16 +36,37 @@ def get_driver(printer_name: str, native_mode: bool = True, force_gdi: bool = Fa
        - Route to native thermal drivers (TSPLDriver, ZPLDriver, EPLDriver) for direct raw command spooling.
     4. GDIDriver is kept strictly as a fallback for document printers (inkjet/laser).
     """
+    # Reload driver & printer service modules dynamically if available in sys.modules
+    for mod_name in ['backend.services.printer_service', 'services.printer_service', 'backend.drivers.zpl_driver', 'backend.drivers.tspl_driver', 'backend.drivers.gdi_driver', 'drivers.zpl_driver', 'drivers.tspl_driver', 'drivers.gdi_driver']:
+        if mod_name in sys.modules:
+            try:
+                importlib.reload(sys.modules[mod_name])
+            except Exception:
+                pass
+
+    try:
+        from backend.drivers.gdi_driver   import GDIDriver as FreshGDI
+        from backend.drivers.tspl_driver  import TSPLDriver as FreshTSPL
+        from backend.drivers.zpl_driver   import ZPLDriver as FreshZPL
+        from backend.drivers.epl_driver   import EPLDriver as FreshEPL
+        from backend.drivers.pdf_driver   import PDFDriver as FreshPDF
+    except ModuleNotFoundError:
+        from drivers.gdi_driver   import GDIDriver as FreshGDI
+        from drivers.tspl_driver  import TSPLDriver as FreshTSPL
+        from drivers.zpl_driver   import ZPLDriver as FreshZPL
+        from drivers.epl_driver   import EPLDriver as FreshEPL
+        from drivers.pdf_driver   import PDFDriver as FreshPDF
+
     if force_gdi:
         logger.info(f"[Router] Explicit GDI Force: '{printer_name}' -> GDIDriver")
-        return GDIDriver()
+        return FreshGDI()
 
-    if PDFDriver.is_supported(printer_name):
+    if FreshPDF.is_supported(printer_name):
         logger.info(f"[Router] '{printer_name}' -> PDF Document Driver")
-        return PDFDriver()
+        return FreshPDF()
 
     # Thermal label printers (TSPL, ZPL, EPL) automatically use native raw hardware commands
-    for driver_cls in [TSPLDriver, ZPLDriver, EPLDriver]:
+    for driver_cls in [FreshTSPL, FreshZPL, FreshEPL]:
         if driver_cls.is_supported(printer_name):
             logger.info(
                 f"[Router] Auto-Forced Native Thermal Spool: '{printer_name}' -> {driver_cls.driver_name}"
@@ -70,7 +74,7 @@ def get_driver(printer_name: str, native_mode: bool = True, force_gdi: bool = Fa
             return driver_cls()
 
     logger.info(f"[Router] '{printer_name}' -> GDIDriver (Default High-Res Bitmap)")
-    return GDIDriver()
+    return FreshGDI()
 
 
 def detect_printer_type(printer_name: str) -> Dict[str, Any]:

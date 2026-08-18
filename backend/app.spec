@@ -1,11 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_dynamic_libs
+pil_binaries = collect_dynamic_libs('PIL')
+
 a = Analysis(
     ['app.py'],
     pathex=['.', '..'],
-    binaries=[],
+    binaries=[] + pil_binaries,
     datas=[
         ('assets/fonts', 'backend/assets/fonts'),
+        ('assets/fonts', 'assets/fonts'),
+        ('assets/raqm', 'backend/assets/raqm'),
+        ('assets/raqm', 'assets/raqm'),
         ('../python windows sdk/Example/Python_pyd', 'tsc_sdk'),
         ('../python windows sdk/TSCLib.dll', 'tsc_sdk'),
     ],
@@ -64,6 +70,8 @@ a = Analysis(
         'PIL.ImageDraw',
         'PIL.ImageFont',
         'PIL.ImageWin',
+        'PIL._imagingft',
+        'PIL.features',
         'reportlab',
         'reportlab.pdfgen',
         'reportlab.pdfgen.canvas',
@@ -97,7 +105,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='BarCode-Services',
+    name='services',
     icon='assets/app.ico',
     debug=False,
     bootloader_ignore_signals=False,
@@ -111,4 +119,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    runtime_hooks=['raqm_bootstrap.py'],
 )

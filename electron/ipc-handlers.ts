@@ -108,8 +108,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow) {
       const quality = options?.quality || 'auto';
       const dpiOverride = options?.dpiOverride;
       const nativeMode = options?.nativeMode !== undefined ? options.nativeMode : true;
+      const calibration = options?.calibration;
       return await httpRequest('POST', getBackendUrl('/api/printers/print-batch'), {
-        printerName, records, copies, template, quality, dpiOverride, nativeMode,
+        printerName, records, copies, template, quality, dpiOverride, nativeMode, calibration,
       });
     }
     catch (err: any) { return { success: false, message: err.message }; }

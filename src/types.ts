@@ -23,6 +23,7 @@ export interface LabelElement {
   textColor?: string;
   textAlign?: 'left' | 'center' | 'right';
   autoShrink?: boolean;
+  autoExpand?: boolean;
   wrapText?: boolean;
 
   // Field binding

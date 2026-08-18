@@ -30,6 +30,21 @@ from backend.services.logging_service import get_logger
 logger = get_logger()
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TSPL Manual Alignment Tweaks & Offsets (in Millimeters)
+# Modify these constants to fine-tune physical label alignment:
+# ─────────────────────────────────────────────────────────────────────────────
+# Base manual offsets for normal (0° upright) printing:
+# Positive X = shifts right, Negative X = shifts left
+# Positive Y = shifts down,  Negative Y = shifts up
+TSPL_MANUAL_OFFSET_X_MM = 0.0
+TSPL_MANUAL_OFFSET_Y_MM = 0.0
+
+# Manual tweaks for 180° rotated mode (portrait-180 / reverse):
+# Shifts printing slightly more to the left (closer to edge). Y is 0.0 to prevent bottom edge cropping.
+TSPL_180_OFFSET_X_MM = -1.5   # Shift left (negative mm) when rotated 180°
+TSPL_180_OFFSET_Y_MM = 0.0    # Vertical offset (0.0mm prevents bottom cropping)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # TSPL printer detection
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -313,16 +328,22 @@ def translate_element_to_tspl(
         except UnicodeEncodeError:
             has_non_ascii = True
             
-        wrap_text = el.get("wrapText", False) or has_non_ascii
-        if wrap_text:
+        wrap_text = el.get("wrapText", False)
+        auto_shrink = bool(el.get("autoShrink", False))
+        auto_expand = bool(el.get("autoExpand", False))
+        fw = str(el.get("fontWeight", "")).lower()
+        bold = fw in ("bold", "700", "800", "900") or el.get("bold") is True or el.get("fontWeight") == 700
+        italic = el.get("fontStyle") == "italic"
+        font_family = str(el.get("fontFamily", "Segoe UI")).strip()
+        is_custom_font = font_family.lower() not in ("tspl font 0", "standard", "mono", "tspl_default", "0")
+
+        is_mixed_nowrap = has_non_ascii and not wrap_text and not auto_shrink and not auto_expand and rotation_deg == 0
+        is_full_pil = wrap_text or auto_shrink or auto_expand or (has_non_ascii and rotation_deg != 0) or is_custom_font or bold or italic
+
+        if is_full_pil:
             try:
                 from PIL import Image, ImageDraw, ImageFont
-                from backend.services.printer_service import (
-                    get_font_path,
-                    _detect_script_kind,
-                    _font_candidates_for_script,
-                    _load_text_font,
-                )
+                from backend.services.printer_service import compute_text_layout
 
                 # Element's native unrotated size in dots
                 unrot_w = max(1, int(float(el.get("width", 10)) * dots_per_mm))
@@ -332,161 +353,169 @@ def translate_element_to_tspl(
                 img = Image.new("1", (unrot_w, unrot_h), 1)
                 draw = ImageDraw.Draw(img)
 
-                bold = el.get("fontWeight") == "bold"
-                italic = el.get("fontStyle") == "italic"
-                
-                font_family = el.get("fontFamily", "Segoe UI")
-                # Language-smart font family override
-                if value:
-                    has_indic = False
-                    has_cjk = False
-                    has_arabic = False
-                    
-                    for char in str(value):
-                        cp = ord(char)
-                        if 0x0900 <= cp <= 0x0D7F:
-                            has_indic = True
-                        elif (0x4E00 <= cp <= 0x9FFF) or (0x3040 <= cp <= 0x30FF) or (0xAC00 <= cp <= 0xD7AF):
-                            has_cjk = True
-                        elif 0x0600 <= cp <= 0x06FF:
-                            has_arabic = True
-                            
-                    if has_indic:
-                        supported_indic = {'nirmala ui', 'nirmala', 'nirmala-bold', 'mangal', 'arial', 'kokila', 'utsaah', 'sanskrit text', 'aparajita', 'arial unicode ms'}
-                        if font_family.lower() not in supported_indic:
-                            font_family = "Nirmala"
-                    elif has_cjk:
-                        supported_cjk = {'malgun gothic', 'microsoft jhenghei', 'microsoft yahei', 'ms gothic', 'simsun', 'msgothic', 'arial unicode ms'}
-                        if font_family.lower() not in supported_cjk:
-                            font_family = "Malgun Gothic"
-                    elif has_arabic:
-                        supported_arabic = {'arial', 'segoe ui', 'times new roman', 'tahoma', 'microsoft uighur'}
-                        if font_family.lower() not in supported_arabic:
-                            font_family = "Arial"
-
-                script_kind = _detect_script_kind(value if value else "")
-                font_candidates = _font_candidates_for_script(
-                    script_kind, bold, italic, get_font_path(font_family, bold, italic)
-                )
                 font_size_pt = float(el.get("fontSize", 10))
-                font_size_px = int(font_size_pt * (dpi / 72.0))
-
-                # RAQM complex-text-layout engine is required for Indic/CJK/Arabic
-                # shaping; otherwise conjuncts/matras render as broken dashes/boxes.
-                # Pass the text so a font that actually contains the glyphs is chosen.
-                font = _load_text_font(font_candidates, font_size_px, script_kind != "latin", value)
-
-                # Wrap text helper function — handles both space-separated (Latin) and
-                # character-level (Indic/CJK/Arabic) scripts
-                def wrap_text_pil(txt: str, fnt: ImageFont.ImageFont, max_w: int) -> list:
-                    def _measure(s):
-                        if hasattr(fnt, 'getlength'):
-                            return fnt.getlength(s)
-                        elif hasattr(fnt, 'getbbox'):
-                            return fnt.getbbox(s)[2]
-                        return 100
-
-                    # Detect if text needs character-level wrapping (no space boundaries)
-                    has_indic_or_cjk = any(
-                        (0x0900 <= ord(c) <= 0x0D7F) or
-                        (0x4E00 <= ord(c) <= 0x9FFF) or
-                        (0x3040 <= ord(c) <= 0x30FF) or
-                        (0xAC00 <= ord(c) <= 0xD7AF) or
-                        (0x0600 <= ord(c) <= 0x06FF)
-                        for c in txt
-                    )
-
-                    wrapped_lines = []
-                    if has_indic_or_cjk:
-                        # Character-level wrapping for scripts without clear word spaces
-                        curr_line = ""
-                        for char in txt:
-                            test = curr_line + char
-                            if _measure(test) <= max_w:
-                                curr_line = test
-                            else:
-                                if curr_line:
-                                    wrapped_lines.append(curr_line)
-                                curr_line = char
-                        if curr_line:
-                            wrapped_lines.append(curr_line)
-                    else:
-                        # Word-level wrapping for Latin/space-separated scripts
-                        words = txt.split(" ")
-                        curr_line = []
-                        for word in words:
-                            test_line = " ".join(curr_line + [word])
-                            if _measure(test_line) <= max_w:
-                                curr_line.append(word)
-                            else:
-                                if curr_line:
-                                    wrapped_lines.append(" ".join(curr_line))
-                                    curr_line = [word]
-                                else:
-                                    wrapped_lines.append(word)
-                                    curr_line = []
-                        if curr_line:
-                            wrapped_lines.append(" ".join(curr_line))
-                    return wrapped_lines
-
-                lines_to_draw = wrap_text_pil(value, font, unrot_w)
-
-                if hasattr(font, 'getbbox'):
-                    bbox = font.getbbox("A")
-                    line_h = bbox[3] - bbox[1]
-                else:
-                    line_h = font_size_px
-
-                line_spacing = int(line_h * 0.25)
-                line_height_total = line_h + line_spacing
-                total_text_h = len(lines_to_draw) * line_height_total - line_spacing
-                start_y = max(0, (unrot_h - total_text_h) // 2)
-
                 text_align = el.get("textAlign", "left")
 
-                for idx_line, line in enumerate(lines_to_draw):
+                layout = compute_text_layout(
+                    value if value else "",
+                    font_family,
+                    bold,
+                    italic,
+                    unrot_w,
+                    unrot_h,
+                    dpi,
+                    font_size_pt=font_size_pt,
+                    wrap_text=wrap_text,
+                    auto_shrink=auto_shrink,
+                    auto_expand=auto_expand,
+                    text_align=text_align,
+                )
+
+                font = layout["font"]
+                lines_to_draw = layout["lines"]
+                slot = layout["slot_h_px"]
+                gap = layout["line_gap_px"]
+                start_y = layout["start_y_px"]
+                line_height_total = slot + gap
+
+                def _measure_line(s):
                     if hasattr(font, 'getlength'):
-                        line_w = font.getlength(line)
+                        return font.getlength(s)
                     elif hasattr(font, 'getbbox'):
-                        line_w = font.getbbox(line)[2]
-                    else:
-                        line_w = 100
+                        bb = font.getbbox(s)
+                        return bb[2] - bb[0]
+                    return len(s) * 8.0
+
+                for idx_line, line in enumerate(lines_to_draw):
+                    line_w = _measure_line(line)
 
                     if text_align == "center":
-                        draw_x = max(0, (unrot_w - line_w) // 2)
+                        draw_x = max(0, int((unrot_w - line_w) // 2))
                     elif text_align == "right":
-                        draw_x = max(0, unrot_w - line_w)
+                        draw_x = max(0, int(unrot_w - line_w))
                     else:
                         draw_x = 0
 
                     draw_y = start_y + idx_line * line_height_total
-                    if draw_y + line_h <= unrot_h:
+                    if draw_y < unrot_h:
                         draw.text((draw_x, draw_y), line, font=font, fill=0) # 0 is black text
 
-                # Apply rotation
                 if rotation_deg != 0:
                     img = img.rotate(-rotation_deg, expand=True, resample=Image.Resampling.BICUBIC)
                     orig_center_x = x_d + w_d / 2
                     orig_center_y = y_d + h_d / 2
                     x_d = int(orig_center_x - img.width / 2)
                     y_d = int(orig_center_y - img.height / 2)
-                    w_d, h_d = img.width, img.height
+                    w_d_tspl, h_d_tspl = img.width, img.height
+                else:
+                    w_d_tspl, h_d_tspl = unrot_w, unrot_h
 
-                w_d, h_d, width_bytes, raw_bytes = _pil_image_to_tspl_bitmap_bytes(img)
-                bitmap_cmd = f"BITMAP {x_d},{y_d},{width_bytes},{h_d},0,".encode('ascii')
+                w_out, h_out, width_bytes, raw_bytes = _pil_image_to_tspl_bitmap_bytes(img)
+                bitmap_cmd = f"BITMAP {x_d},{y_d},{width_bytes},{h_out},0,".encode('ascii')
                 lines.append(bitmap_cmd + raw_bytes + b"\r\n")
-                logger.info(f"[TSPL] Spooled wrapped text as BITMAP {w_d}x{h_d}")
             except Exception as tex:
                 logger.warning(f"[TSPL] Wrapped text BITMAP conversion failed: {tex}")
-                wrap_text = False
+                is_mixed_nowrap = True # fallback if full PIL failed
 
-        if not wrap_text and not has_non_ascii:
+        if is_mixed_nowrap:
+            try:
+                import re
+                from PIL import Image, ImageDraw, ImageFont
+                from backend.services.printer_service import (
+                    get_font_path, _detect_script_kind, _font_candidates_for_script, _load_text_font
+                )
+
+                chunks = []
+                for match in re.finditer(r'[^\x00-\x7F]+|[\x00-\x7F]+', value):
+                    chunk_text = match.group(0)
+                    is_ascii = True
+                    try:
+                        chunk_text.encode('ascii')
+                    except UnicodeEncodeError:
+                        is_ascii = False
+                    chunks.append({"text": chunk_text, "is_ascii": is_ascii})
+
+                font_size_pt = float(el.get("fontSize", 10))
+                font_h_d = max(8, int(font_size_pt * dpi / 72.0))
+                font_w_d = font_h_d
+                char_w_d = font_h_d * 0.55
+
+                total_w_d = 0
+                chunk_widths = []
+                fonts = []
+
+                for chunk in chunks:
+                    if chunk["is_ascii"]:
+                        cw = int(len(chunk["text"]) * char_w_d)
+                        chunk_widths.append(cw)
+                        fonts.append(None)
+                        total_w_d += cw
+                    else:
+                        bold = el.get("fontWeight") == "bold"
+                        italic = el.get("fontStyle") == "italic"
+                        font_family = "Noto Sans" # Force Noto Sans for Indic chunks
+                        script_kind = _detect_script_kind(chunk["text"])
+                        font_candidates = _font_candidates_for_script(
+                            script_kind, bold, italic, get_font_path(font_family, bold, italic)
+                        )
+                        
+                        font = _load_text_font(font_candidates, font_h_d, True, chunk["text"])
+                        if hasattr(font, 'getlength'):
+                            cw = int(font.getlength(chunk["text"]))
+                        elif hasattr(font, 'getbbox'):
+                            bb = font.getbbox(chunk["text"])
+                            cw = bb[2] - bb[0]
+                        else:
+                            cw = int(len(chunk["text"]) * font_h_d * 0.8)
+                        
+                        chunk_widths.append(cw)
+                        fonts.append(font)
+                        total_w_d += cw
+
+                text_align = el.get("textAlign", "left")
+                curr_x_d = x_d
+                if text_align == "center":
+                    curr_x_d = max(x_d, int(x_d + (w_d - total_w_d) // 2))
+                elif text_align == "right":
+                    curr_x_d = max(x_d, int(x_d + w_d - total_w_d))
+
+                for chunk, cw, font in zip(chunks, chunk_widths, fonts):
+                    text_str = chunk["text"]
+                    if chunk["is_ascii"]:
+                        safe_value = text_str.replace('"', '\\"')
+                        lines.append(
+                            f'TEXT {curr_x_d},{y_d},"0",{tspl_rot},{font_w_d},{font_h_d},"{safe_value}"\r\n'.encode('ascii')
+                        )
+                    else:
+                        img = Image.new("1", (cw, font_h_d), 1)
+                        draw = ImageDraw.Draw(img)
+                        if hasattr(font, 'getbbox'):
+                            bb = font.getbbox(text_str)
+                            text_h = bb[3] - bb[1]
+                        elif hasattr(font, 'getmetrics'):
+                            ascent, descent = font.getmetrics()
+                            text_h = ascent + descent
+                        else:
+                            text_h = font_h_d
+                        
+                        draw_y = max(0, (font_h_d - text_h) // 2)
+                        draw.text((0, draw_y), text_str, font=font, fill=0)
+                        
+                        bw_d, bh_d, width_bytes, raw_bytes = _pil_image_to_tspl_bitmap_bytes(img)
+                        bitmap_cmd = f"BITMAP {curr_x_d},{y_d},{width_bytes},{bh_d},0,".encode('ascii')
+                        lines.append(bitmap_cmd + raw_bytes + b"\r\n")
+                        
+                    curr_x_d += cw
+
+            except Exception as e:
+                logger.error(f"[TSPL] Mixed text inline parsing failed: {e}")
+
+        if not is_full_pil and not is_mixed_nowrap:
             # ASCII-only TEXT command — only used for pure ASCII text
             font_size_pt = float(el.get("fontSize", 10))
             font_h_d = max(8, int(font_size_pt * dpi / 72.0))
             font_w_d = font_h_d
 
-            # Alignments offset adjustment
             text_align = el.get("textAlign", "left")
             if text_align in ("center", "right"):
                 char_w_d = font_h_d * 0.55
@@ -1008,9 +1037,18 @@ class TSPLDriver(PrinterDriverInterface):
         errors: List[str] = []
         dots_per_mm = dpi / 25.4
 
-        # Horizontal safety padding (mm) to prevent elements from touching sticker edges
-        EDGE_PADDING_MM = 2.0
-        edge_padding_dots = int(round(EDGE_PADDING_MM * dots_per_mm))
+        # Calculate total combined offsets (API calibration + module constants + 180° mode offsets)
+        base_tweak_x_mm = TSPL_180_OFFSET_X_MM if is_180 else TSPL_MANUAL_OFFSET_X_MM
+        base_tweak_y_mm = TSPL_180_OFFSET_Y_MM if is_180 else TSPL_MANUAL_OFFSET_Y_MM
+        
+        total_offset_x_mm = offset_x_mm + base_tweak_x_mm
+        total_offset_y_mm = offset_y_mm + base_tweak_y_mm
+        
+        logger.info(
+            f"[TSPL] Alignment offsets: is_180={is_180}, "
+            f"offset_x={total_offset_x_mm:.2f}mm (calib={offset_x_mm}, tweak={base_tweak_x_mm}), "
+            f"offset_y={total_offset_y_mm:.2f}mm (calib={offset_y_mm}, tweak={base_tweak_y_mm})"
+        )
 
         # Process layouts in chunks based on columns
         for i in range(0, len(flat_records), columns):
@@ -1054,17 +1092,11 @@ class TSPLDriver(PrinterDriverInterface):
                     # Render single label at native printer DPI
                     lbl_img = render_label_image(tmpl_for_render, curr_record, dpi)
                     
-                    # Paste position: margin + column offset + edge padding (page-relative coordinates)
-                    lbl_x_mm = margin_left_mm + col * (col_sticker_w + gap_horizontal_mm) + EDGE_PADDING_MM
-                    lbl_y_mm = margin_top_mm
+                    # Paste position: margin + column offset + total offset (page-relative coordinates)
+                    lbl_x_mm = margin_left_mm + col * (col_sticker_w + gap_horizontal_mm) + total_offset_x_mm
+                    lbl_y_mm = margin_top_mm + total_offset_y_mm
                     lbl_x_dots = int(round(lbl_x_mm * dots_per_mm))
                     lbl_y_dots = int(round(lbl_y_mm * dots_per_mm))
-                    
-                    # Clamp paste position so the image stays within printable bounds
-                    # (accounting for edge padding on the right side too)
-                    max_x_paste = max(0, row_w_px - edge_padding_dots - 1)
-                    lbl_x_dots = max(edge_padding_dots, min(lbl_x_dots, max_x_paste))
-                    lbl_y_dots = max(0, min(lbl_y_dots, row_h_px - 1))
                     
                     row_img.paste(lbl_img, (lbl_x_dots, lbl_y_dots))
             
@@ -1081,11 +1113,8 @@ class TSPLDriver(PrinterDriverInterface):
             # 4. Convert row-level PIL Image to TSPL raw BITMAP bytes
             w_d, h_d, width_bytes, raw_bytes = _pil_image_to_tspl_bitmap_bytes(row_img)
 
-            # 5. Apply calibration X/Y offsets consistently
-            x_d = max(0, -hw_offset_x_dots + int(round(offset_x_mm * dots_per_mm)))
-            y_d = max(0, int(round(offset_y_mm * dots_per_mm)))
-            
-            bitmap_cmd = f"BITMAP {x_d},{y_d},{width_bytes},{h_d},0,".encode('ascii')
+            # Bitmap placed at (0,0) on page since offsets are baked into row_img
+            bitmap_cmd = f"BITMAP 0,0,{width_bytes},{h_d},0,".encode('ascii')
             block_bytes.extend(bitmap_cmd + raw_bytes + b"\r\n")
             
             # PRINT 1,1 — print 1 label (set), 1 copy each.

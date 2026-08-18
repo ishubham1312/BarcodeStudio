@@ -181,7 +181,7 @@ export function useElectronAPI(): ElectronAPI {
       onOpenFile: () => { },
       onOpenConfigFile: () => { },
       getInitialFile: async () => null,
-      getSystemFonts: async () => ({ success: true, fonts: ["Arial", "Segoe UI", "Nirmala UI", "Malgun Gothic", "MS Gothic", "Microsoft YaHei", "Arial Unicode MS"] }),
+      getSystemFonts: async () => ({ success: true, fonts: ["Arial", "Segoe UI", "Noto Sans UI", "Malgun Gothic", "MS Gothic", "Microsoft YaHei", "Arial Unicode MS"] }),
       checkUpdates: async () => {
         try {
           const response = await fetch("https://api.github.com/repos/ishubham1312/BarCode-Studio/releases/latest");

@@ -4,7 +4,85 @@ import sys
 import json
 import base64
 import subprocess
+import ctypes
 from typing import List, Dict, Any, Optional
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RAQM (complex text layout) runtime bootstrap
+#
+# Pillow's RAQM engine is what correctly joins Devanagari/Hindi conjuncts and
+# matras. On the dev PC its dependency DLLs are resolved from PATH (e.g. an
+# installed Tesseract-OCR), but a frozen PyInstaller build does NOT bundle
+# them. On a clean target PC RAQM therefore silently fails to initialise and
+# Indic text falls back to unshaped BASIC layout (every character / matra is
+# printed individually). We bundle those DLLs (backend/assets/raqm) and load
+# them before PIL is imported so RAQM is always available in the exe.
+# (A PyInstaller runtime-hook does this at process start; this is a belt-and-
+# braces fallback for any context that imports this module directly.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _walk_up_for(sub_rel):
+    candidates = []
+    try:
+        start = os.path.dirname(os.path.abspath(sys.executable))
+    except Exception:
+        start = os.getcwd()
+    cur = start
+    for _ in range(6):
+        if not cur:
+            break
+        cand = os.path.join(cur, sub_rel)
+        if os.path.isdir(cand):
+            candidates.append(cand)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return candidates
+
+
+def ensure_raqm_dlls():
+    raqm_dll_names = (
+        "libfribidi-0.dll", "libharfbuzz-0.dll", "libfreetype-6.dll",
+        "libglib-2.0-0.dll", "libgraphite2.dll", "libintl-8.dll",
+        "libiconv-2.dll", "libffi-8.dll", "libpcre2-8-0.dll", "libunistring-5.dll",
+    )
+    raqm_dirs = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        for sub in ("backend/assets/raqm", "assets/raqm", "raqm"):
+            p = os.path.join(meipass, sub)
+            if os.path.isdir(p):
+                raqm_dirs.append(p)
+    raqm_dirs += _walk_up_for(os.path.join("backend", "assets", "raqm"))
+    raqm_dirs += _walk_up_for(os.path.join("assets", "raqm"))
+    dev_base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    dev_raqm = os.path.join(dev_base, "assets", "raqm")
+    if os.path.isdir(dev_raqm):
+        raqm_dirs.append(dev_raqm)
+
+    seen = set()
+    for d in raqm_dirs:
+        if d in seen:
+            continue
+        seen.add(d)
+        try:
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(d)
+        except Exception:
+            pass
+        for dll in raqm_dll_names:
+            fp = os.path.join(d, dll)
+            if os.path.exists(fp):
+                try:
+                    ctypes.CDLL(fp)
+                except Exception:
+                    pass
+
+
+ensure_raqm_dlls()
+
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from backend.services.logging_service import get_logger
 from backend.services.barcode_service import generate_1d_barcode, generate_qr_code
@@ -17,6 +95,8 @@ try:
 except Exception:
     _RAQM_LAYOUT = None
     _HAVE_RAQM = False
+
+logger.info(f"[FontEngine] RAQM complex-text-layout available: {_HAVE_RAQM}")
 
 # Setup win32print imports
 WIN32_PRINT_AVAILABLE = False
@@ -32,14 +112,43 @@ if sys.platform == 'win32':
     logger.warning("pywin32 / win32print is not installed. Native printing is mock-only.")
 
 def get_bundled_fonts_dir() -> str:
+  # 1. PyInstaller temporary unpacked bundle folder (_MEIPASS)
+  if hasattr(sys, '_MEIPASS'):
+    for sub in [
+      os.path.join(sys._MEIPASS, 'backend', 'assets', 'fonts'),
+      os.path.join(sys._MEIPASS, 'assets', 'fonts'),
+      os.path.join(sys._MEIPASS, 'fonts')
+    ]:
+      if os.path.exists(sub):
+        return sub
+
+  # 2. Frozen binary directory (onedir build or side-by-side resources)
   if getattr(sys, 'frozen', False):
-    # Packaged build: executable is in 'resources/backend'
     base_dir = os.path.dirname(sys.executable)
-    return os.path.join(base_dir, 'assets', 'fonts')
-  else:
-    # Development mode: printer_service.py is in 'backend/services'
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_dir, 'assets', 'fonts')
+    for sub in [
+      os.path.join(base_dir, 'backend', 'assets', 'fonts'),
+      os.path.join(base_dir, 'assets', 'fonts'),
+      os.path.join(base_dir, 'resources', 'backend', 'assets', 'fonts'),
+      os.path.join(base_dir, '..', 'assets', 'fonts')
+    ]:
+      if os.path.exists(sub):
+        return sub
+    # Walk up from the executable in case the bundle is nested (e.g. an
+    # electron-builder extraResources layout where the python exe lives
+    # under backend/dist/services/... but fonts are at backend/assets/fonts).
+    for sub in _walk_up_for(os.path.join('backend', 'assets', 'fonts')):
+      if os.path.exists(sub):
+        return sub
+    for sub in _walk_up_for(os.path.join('assets', 'fonts')):
+      if os.path.exists(sub):
+        return sub
+
+  # 3. Development mode: relative to printer_service.py
+  dev_base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+  dev_fonts = os.path.join(dev_base, 'assets', 'fonts')
+  if os.path.exists(dev_fonts):
+    return dev_fonts
+  return dev_fonts
 
 # Helper to find a font path on Windows
 def get_font_path(font_name: str, bold: bool = False, italic: bool = False) -> str:
@@ -48,25 +157,23 @@ def get_font_path(font_name: str, bold: bool = False, italic: bool = False) -> s
   # Check bundled directory first
   bundled_dir = get_bundled_fonts_dir()
   if os.path.exists(bundled_dir):
-    is_nirmala = any(k in font_name_clean for k in ['nirmala', 'nirmala-bold', 'mangal', 'hindi', 'marathi', 'tamil', 'telugu', 'bengali', 'gujarati', 'punjabi', 'devanagari', 'indic'])
-    is_arial = 'arial' in font_name_clean
+    is_indic = any(k in font_name_clean for k in ['noto sans', 'Noto Sans', 'Noto Sans ui', 'Noto Sans-bold', 'Noto Sans', 'hindi', 'marathi', 'tamil', 'telugu', 'bengali', 'gujarati', 'punjabi', 'devanagari', 'indic'])
+    is_arial = 'arial' in font_name_clean and 'unicode' not in font_name_clean
     is_segoe = 'segoe' in font_name_clean
     is_msgothic = 'ms gothic' in font_name_clean or 'msgothic' in font_name_clean
     is_msyh = 'microsoft yahei' in font_name_clean or 'msyh' in font_name_clean or 'yahei' in font_name_clean
     is_malgun = 'malgun' in font_name_clean
-    is_arialuni = 'arial unicode ms' in font_name_clean or 'arialuni' in font_name_clean or 'unicode' in font_name_clean
+    is_arialuni = 'arial unicode ms' in font_name_clean or 'arialuni' in font_name_clean
 
     filename = None
-    if is_nirmala:
-      filename = 'nirmala-bold.ttf' if bold else 'nirmala.ttf'
+    if is_indic:
+      filename = 'Noto Sans.ttf'
     elif is_msgothic:
       filename = 'msgothic.ttf'
     elif is_msyh:
       filename = 'msyh.ttf'
     elif is_malgun:
       filename = 'malgunbd.ttf' if bold else 'malgun.ttf'
-    elif is_arialuni:
-      filename = 'arialuni.ttf'
     elif is_arial:
       if bold and italic:
         filename = 'arialbi.ttf'
@@ -85,11 +192,11 @@ def get_font_path(font_name: str, bold: bool = False, italic: bool = False) -> s
         filename = 'segoeuii.ttf'
       else:
         filename = 'segoeui.ttf'
+    elif is_arialuni:
+      filename = 'arialuni.ttf'
     else:
-      # Default fallback to Arial Unicode MS locally if available, else Segoe UI
-      if os.path.exists(os.path.join(bundled_dir, 'arialuni.ttf')):
-        filename = 'arialuni.ttf'
-      elif bold and italic:
+      # Default fallback to Segoe UI locally if available
+      if bold and italic:
         filename = 'segoeuiz.ttf'
       elif bold:
         filename = 'segoeuib.ttf'
@@ -106,6 +213,11 @@ def get_font_path(font_name: str, bold: bool = False, italic: bool = False) -> s
   font_name_clean = font_name.strip()
   windir = os.environ.get('WINDIR', 'C:\\Windows')
   fonts_dir = os.path.join(windir, 'Fonts')
+
+  if any(k in font_name.lower() for k in ['noto sans', 'Noto Sans', 'Noto Sans ui', 'hindi', 'devanagari', 'indic', 'Noto Sans']):
+    noto_path = os.path.join(bundled_dir, "Noto Sans.ttf")
+    if os.path.exists(noto_path):
+      return noto_path
   
   # Try looking in registry first
   try:
@@ -187,11 +299,11 @@ def get_font_path(font_name: str, bold: bool = False, italic: bool = False) -> s
       'italic': 'timesi.ttf',
       'bold_italic': 'timesbi.ttf'
     },
-     'nirmala': {
-      'regular': 'nirmala.ttf',
-      'bold': 'nirmala-bold.ttf',
-      'italic': 'nirmala.ttf',
-      'bold_italic': 'nirmala-bold.ttf'
+     'noto sans': {
+      'regular': 'Noto Sans.ttf',
+      'bold': 'Noto Sans.ttf',
+      'italic': 'Noto Sans.ttf',
+      'bold_italic': 'Noto Sans.ttf'
     }
   }
   
@@ -291,7 +403,7 @@ def _detect_script_kind(text: str) -> str:
 
 
 _SCRIPT_FALLBACK_FAMILIES = {
-    "indic":    ["Nirmala", "nirmala-bold", "Mangal", "Kokila", "Utsaah", "Arial Unicode MS", "Lohit Devanagari"],
+    "indic":    ["Noto Sans"],
     "arabic":   ["Arial Unicode MS", "Segoe UI", "Tahoma", "Gisha"],
     "korean":   ["Malgun Gothic", "Arial Unicode MS"],
     "japanese": ["MS Gothic", "Yu Gothic", "Arial Unicode MS"],
@@ -305,27 +417,26 @@ def _font_candidates_for_script(script_kind: str, bold: bool, italic: bool, pref
     bundled = get_bundled_fonts_dir()
     candidates: List[str] = []
 
-    if preferred_path and os.path.exists(preferred_path):
-        candidates.append(preferred_path)
+    if script_kind == "indic":
+        # For Hindi / Indic text, ALWAYS prioritize bundled Noto Sans font
+        noto_bundled = os.path.join(bundled, "Noto Sans.ttf")
+        candidates.append(noto_bundled)
 
-    for fam in _SCRIPT_FALLBACK_FAMILIES.get(script_kind, ["Arial Unicode MS", "Arial"]):
-        if fam.lower() == "arial unicode ms":
-            uni = os.path.join(bundled, "arialuni.ttf")
-            if os.path.exists(uni):
-                candidates.append(uni)
-            else:
-                p = get_font_path("Arial Unicode MS", bold, italic)
-                if p:
-                    candidates.append(p)
-        else:
+        if preferred_path and os.path.exists(preferred_path) and "arialuni" not in preferred_path.lower():
+            candidates.append(preferred_path)
+    else:
+        if preferred_path and os.path.exists(preferred_path):
+            candidates.append(preferred_path)
+
+        for fam in _SCRIPT_FALLBACK_FAMILIES.get(script_kind, ["Segoe UI", "Arial"]):
             p = get_font_path(fam, bold, italic)
             if p:
                 candidates.append(p)
 
-    for extra in ("arialuni.ttf", "arial.ttf", "segoeui.ttf"):
-        p = os.path.join(bundled, extra)
-        if os.path.exists(p):
-            candidates.append(p)
+        for extra in ("segoeui.ttf", "arial.ttf", "arialuni.ttf"):
+            p = os.path.join(bundled, extra)
+            if os.path.exists(p):
+                candidates.append(p)
 
     seen = set()
     out: List[str] = []
@@ -350,6 +461,9 @@ def _load_text_font(candidates: List[str], size: int, complex_layout: bool, text
     size = max(1, int(size))
     last_err: Optional[Exception] = None
 
+    has_indic = any(0x0900 <= ord(c) <= 0x0D7F for c in text) if text else False
+    use_complex = complex_layout or has_indic
+
     ordered = list(candidates)
     if text:
         best = _pick_best_candidate(candidates, text)
@@ -358,7 +472,7 @@ def _load_text_font(candidates: List[str], size: int, complex_layout: bool, text
 
     for path in ordered:
         try:
-            if complex_layout and _HAVE_RAQM:
+            if use_complex and _HAVE_RAQM:
                 return ImageFont.truetype(path, size, layout_engine=_RAQM_LAYOUT)
             return ImageFont.truetype(path, size)
         except Exception as ex:
@@ -371,6 +485,189 @@ def _load_text_font(candidates: List[str], size: int, complex_layout: bool, text
         if last_err:
             raise last_err
         raise RuntimeError("No usable font found")
+
+
+def compute_text_layout(
+    text: str,
+    font_family: str,
+    bold: bool,
+    italic: bool,
+    w_px: int,
+    h_px: int,
+    dpi: int,
+    font_size_pt: float = 10.0,
+    wrap_text: bool = False,
+    auto_shrink: bool = False,
+    auto_expand: bool = False,
+    text_align: str = "left",
+) -> Dict[str, Any]:
+    """
+    Resolve the optimal font size, wrapped lines and per-line geometry for a
+    text element, honouring auto-shrink / auto-expand and keeping a safe
+    vertical gap so glyphs (including tall Devanagari matras / Arabic marks)
+    never collide with the neighbouring line.
+
+    All geometry is returned in pixel space relative to the element box
+    (``w_px`` x ``h_px``).
+    """
+    text = text or ""
+
+    script_kind = _detect_script_kind(text)
+    preferred_path = get_font_path(font_family, bold, italic)
+    candidates = _font_candidates_for_script(script_kind, bold, italic, preferred_path)
+    complex_layout = script_kind != "latin"
+
+    def _load(size: int) -> ImageFont.ImageFont:
+        return _load_text_font(candidates, size, complex_layout, text)
+
+    def _measure(fnt: ImageFont.ImageFont, s: str) -> float:
+        if hasattr(fnt, 'getlength'):
+            return fnt.getlength(s)
+        if hasattr(fnt, 'getbbox'):
+            bb = fnt.getbbox(s)
+            return bb[2] - bb[0]
+        return len(s) * 8.0
+
+    def _wrap(fnt: ImageFont.ImageFont, max_w: int) -> List[str]:
+        is_cjk = any(
+            (0x4E00 <= ord(c) <= 0x9FFF) or (0x3040 <= ord(c) <= 0x30FF)
+            or (0xAC00 <= ord(c) <= 0xD7AF)
+            for c in text
+        )
+        out: List[str] = []
+        for para in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            if not para.strip():
+                out.append("")
+                continue
+            if is_cjk:
+                cur = ""
+                for ch in para:
+                    if _measure(fnt, cur + ch) <= max_w:
+                        cur += ch
+                    else:
+                        if cur:
+                            out.append(cur)
+                        cur = ch
+                if cur:
+                    out.append(cur)
+            else:
+                words = para.split(" ")
+                cw: List[str] = []
+                for word in words:
+                    test_line = " ".join(cw + [word]) if cw else word
+                    if _measure(fnt, test_line) <= max_w:
+                        cw.append(word)
+                    else:
+                        if cw:
+                            out.append(" ".join(cw))
+                            cw = []
+                        if _measure(fnt, word) > max_w:
+                            part = ""
+                            for ch in word:
+                                if _measure(fnt, part + ch) <= max_w:
+                                    part += ch
+                                else:
+                                    if part:
+                                        out.append(part)
+                                    part = ch
+                            if part:
+                                cw = [part]
+                        else:
+                            cw = [word]
+                if cw:
+                    out.append(" ".join(cw))
+        return out if out else [text]
+
+    def _slot_h(fnt: ImageFont.ImageFont, size: int) -> int:
+        if hasattr(fnt, 'getmetrics'):
+            a, d = fnt.getmetrics()
+            base = a + d
+        elif hasattr(fnt, 'getbbox'):
+            bb = fnt.getbbox("ÅgyQj|महाकविपूँ")
+            base = bb[3] - bb[1]
+        else:
+            base = int(size * 1.2)
+        slot = max(int(size * 1.2), base)
+        # Extra breathing room for scripts with tall combining marks so they
+        # never collide with the line above/below.
+        if script_kind == "indic":
+            slot += int(size * 0.30)
+        elif script_kind in ("arabic", "thai"):
+            slot += int(size * 0.20)
+        else:
+            slot += int(size * 0.10)
+        return slot
+
+    def _line_gap(slot: int) -> int:
+        return max(2, int(slot * 0.25))
+
+    def _fits(size: int):
+        f = _load(size)
+        if wrap_text:
+            lines = _wrap(f, max(1, w_px - 2))
+            slot = _slot_h(f, size)
+            gap = _line_gap(slot)
+            total = (len(lines) * slot + (len(lines) - 1) * gap) if lines else slot
+            widest = max((_measure(f, l) for l in lines), default=0)
+            return (widest <= max(1, w_px - 2)) and (total <= max(1, h_px)), lines, slot, gap
+        else:
+            w = _measure(f, text)
+            fh = int(size * 0.75)
+            return (w <= max(1, w_px - 2)) and (fh <= max(1, h_px)), [text], _slot_h(f, size), 0
+
+    base_size_px = max(1, int(round(float(font_size_pt) * (dpi / 72.0))))
+    min_size_px = max(4, int(round(4.0 * (dpi / 72.0))))
+    max_size_px = max(base_size_px + int(round(3.0 * (dpi / 72.0))), int(round(base_size_px * 3.5)))
+
+    chosen = base_size_px
+    if auto_expand:
+        # Grow the font until it fills the element box (never overflows).
+        size = base_size_px
+        while size <= max_size_px:
+            ok, _lines, _slot, _gap = _fits(size)
+            if ok:
+                chosen = size
+                size += 1
+            else:
+                break
+
+    # If auto_shrink is enabled and chosen size overflows, step down:
+    if auto_shrink:
+        ok, _, _, _ = _fits(chosen)
+        if not ok:
+            size = chosen
+            while size > min_size_px:
+                size -= 1
+                ok, _, _, _ = _fits(size)
+                if ok:
+                    break
+            chosen = max(min_size_px, size)
+
+    font = _load(chosen)
+    if wrap_text:
+        lines = _wrap(font, max(1, w_px - 2))
+    else:
+        lines = [text]
+    slot = _slot_h(font, chosen)
+    gap = _line_gap(slot)
+    total = (len(lines) * slot + (len(lines) - 1) * gap) if lines else slot
+    start_y = max(0, (h_px - total) // 2)
+
+    return {
+        "font": font,
+        "font_size_px": chosen,
+        "lines": lines,
+        "slot_h_px": slot,
+        "line_gap_px": gap,
+        "total_h_px": total,
+        "start_y_px": start_y,
+        "script_kind": script_kind,
+        "wrap": wrap_text,
+        "text_align": text_align,
+        "w_px": w_px,
+        "h_px": h_px,
+    }
+
 
 def _execute_powershell_command(command: str) -> Optional[str]:
   try:
@@ -568,13 +865,11 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
   width_px  = max(1, int(round(width_mm  * pixels_per_mm)))
   height_px = max(1, int(round(height_mm * pixels_per_mm)))
 
-  # Internal safe margin padding (1.5mm) matching ZPL driver standard
-  safe_margin_mm = 1.5
-  safe_margin_px = int(round(safe_margin_mm * pixels_per_mm))
-  min_x_px = safe_margin_px
-  max_x_px = max(min_x_px + 1, width_px - safe_margin_px)
-  min_y_px = safe_margin_px
-  max_y_px = max(min_y_px + 1, height_px - safe_margin_px)
+  # Use exact pixel coordinates matching canvas dimensions
+  min_x_px = 0
+  max_x_px = width_px
+  min_y_px = 0
+  max_y_px = height_px
 
   bg_color = "black" if negative else "white"
   image = Image.new("RGB", (width_px, height_px), bg_color)
@@ -599,16 +894,16 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
     el_w = el.get("width", 10)
     el_h = el.get("height", 10)
 
-    # Dimensions conversion with 1.5mm internal padding margin
+    # Dimensions conversion
     raw_x = int(round(el_x * pixels_per_mm))
     raw_y = int(round(el_y * pixels_per_mm))
     raw_w = int(round(el_w * pixels_per_mm))
     raw_h = int(round(el_h * pixels_per_mm))
 
-    x = max(min_x_px, min(raw_x, max_x_px - 1))
-    y = max(min_y_px, min(raw_y, max_y_px - 1))
-    w = max(1, min(raw_w, max_x_px - x))
-    h = max(1, min(raw_h, max_y_px - y))
+    x = max(0, min(raw_x, width_px - 1))
+    y = max(0, min(raw_y, height_px - 1))
+    w = max(1, min(raw_w, width_px - x))
+    h = max(1, min(raw_h, height_px - y))
     el_type = el.get("type")
     
     temp_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -703,9 +998,7 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
             has_other_unicode = True
             
         if has_indic:
-          supported_indic = {'nirmala', 'mangal', 'kokila', 'utsaah', 'sanskrit text', 'aparajita', 'arial unicode ms'}
-          if font_family.lower() not in supported_indic:
-            font_family = "Nirmala"
+          font_family = "Noto Sans"
         elif has_korean:
           font_family = "Malgun Gothic"
         elif has_japanese:
@@ -744,8 +1037,59 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
         return _load_text_font(font_candidates, size_px, complex_layout, text)
 
       wrap_text = el.get("wrapText", False)
-      auto_shrink = el.get("autoShrink", False)
-      
+      auto_shrink = bool(el.get("autoShrink", False))
+      auto_expand = bool(el.get("autoExpand", False))
+      is_auto_sizing = auto_shrink or auto_expand
+
+      # Auto-expand: grow the font until it fills the element box (width AND
+      # height) without overflowing. Works for both single-line and wrapped text.
+      clean_text = text.strip() if text else ""
+      can_auto_expand = bool(auto_expand)
+      if can_auto_expand and clean_text:
+        max_grow = max(font_size_px + int(round(3.0 * (dpi / 72.0))), int(round(font_size_px * 3.5)))
+        trial = font_size_px
+        while trial < max_grow:
+          test_size = trial + 1
+          f = _load_font(test_size)
+          if wrap_text:
+            test_lines = wrap_text_pil(text, f, max(1, w - 2))
+            if hasattr(f, 'getmetrics'):
+              ascent, descent = f.getmetrics()
+              base = ascent + descent
+            elif hasattr(f, 'getbbox'):
+              bbox = f.getbbox("ÅgyQj|महाकविपूँ")
+              base = bbox[3] - bbox[1]
+            else:
+              base = int(test_size * 1.2)
+            slot_px = max(int(test_size * 1.2), base)
+            if script_kind == "indic":
+              slot_px += int(test_size * 0.30)
+            elif script_kind in ("arabic", "thai"):
+              slot_px += int(test_size * 0.20)
+            else:
+              slot_px += int(test_size * 0.10)
+            gap_px = max(2, int(slot_px * 0.25))
+            line_height_total_mm = (slot_px + gap_px) / pixels_per_mm
+            max_line_w_px = max([f.getlength(l) if hasattr(f, 'getlength') else (f.getbbox(l)[2] - f.getbbox(l)[0] if hasattr(f, 'getbbox') else len(l) * 8) for l in test_lines], default=0)
+            if total_text_h_mm <= el_h and max_line_w_px <= max(1, w - 2):
+              font_size_px = test_size
+              trial = test_size
+            else:
+              break
+          else:
+            if hasattr(f, 'getlength'):
+              tw = f.getlength(clean_text)
+            elif hasattr(f, 'getbbox'):
+              tw = f.getbbox(clean_text)[2] - f.getbbox(clean_text)[0]
+            else:
+              tw = len(clean_text) * test_size * 0.55
+            fh = int(test_size * 0.75)
+            if tw <= max(1, w - 2) and (h <= 0 or fh <= h):
+              font_size_px = test_size
+              trial = test_size
+            else:
+              break
+
       # Wrap text helper function — handles both space-separated (Latin) and
       # character-level (Indic/CJK/Arabic) scripts
       def wrap_text_pil(txt: str, fnt: ImageFont.ImageFont, max_w: int) -> list:
@@ -816,35 +1160,67 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
 
       if wrap_text:
         min_size_px = int(round(4.0 * (dpi / 72.0)))
-        # Reduce font size until text lines fit within max_w AND el_h
-        while font_size_px > min_size_px:
-          font = _load_font(font_size_px)
-          lines_to_draw = wrap_text_pil(text, font, max(1, w - 4))
-          line_h_px = font.getbbox("A")[3] - font.getbbox("A")[1] if hasattr(font, 'getbbox') else font_size_px
-          line_h_mm = line_h_px / pixels_per_mm
-          line_spacing_mm = line_h_mm * 0.25
-          line_height_total_mm = line_h_mm + line_spacing_mm
-          total_text_h_mm = len(lines_to_draw) * line_height_total_mm - line_spacing_mm
-          max_line_w_px = max(font.getlength(l) if hasattr(font, 'getlength') else (font.getbbox(l)[2] - font.getbbox(l)[0] if hasattr(font, 'getbbox') else len(l) * 8) for l in lines_to_draw) if lines_to_draw else 0
+        if auto_shrink:
+          # Reduce font size until text lines fit strictly within max_w AND el_h (no bottom cropping)
+          while font_size_px > min_size_px:
+            font = _load_font(font_size_px)
+            lines_to_draw = wrap_text_pil(text, font, max(1, w - 2))
+            if hasattr(font, 'getmetrics'):
+              ascent, descent = font.getmetrics()
+              base = ascent + descent
+            elif hasattr(font, 'getbbox'):
+              bbox = font.getbbox("ÅgyQj|महाकविपूँ")
+              base = bbox[3] - bbox[1]
+            else:
+              base = int(font_size_px * 1.2)
+            # Glyph slot height = font line box plus breathing room. Scripts with
+            # tall combining marks (Devanagari matras, Arabic, Thai) get extra
+            # headroom so they never collide with the line above/below.
+            slot_px = max(int(font_size_px * 1.2), base)
+            if script_kind == "indic":
+              slot_px += int(font_size_px * 0.30)
+            elif script_kind in ("arabic", "thai"):
+              slot_px += int(font_size_px * 0.20)
+            else:
+              slot_px += int(font_size_px * 0.10)
+            gap_px = max(2, int(slot_px * 0.25))
+            line_h_px = slot_px
+            line_h_mm = slot_px / pixels_per_mm
+            line_spacing_mm = gap_px / pixels_per_mm
+            line_height_total_mm = line_h_mm + line_spacing_mm
+            total_text_h_mm = len(lines_to_draw) * line_height_total_mm - line_spacing_mm
+            max_line_w_px = max(font.getlength(l) if hasattr(font, 'getlength') else (font.getbbox(l)[2] - font.getbbox(l)[0] if hasattr(font, 'getbbox') else len(l) * 8) for l in lines_to_draw) if lines_to_draw else 0
 
-          if total_text_h_mm <= el_h and max_line_w_px <= max(1, w - 4):
-            break
-          if not auto_shrink and total_text_h_mm <= el_h * 1.05 and max_line_w_px <= w:
-            break
-          font_size_px -= 1
+            if total_text_h_mm <= el_h and max_line_w_px <= max(1, w - 2):
+              break
+            font_size_px -= 1
+          else:
+            font = _load_font(font_size_px)
+            lines_to_draw = wrap_text_pil(text, font, max(1, w - 2))
         else:
           font = _load_font(font_size_px)
-          lines_to_draw = wrap_text_pil(text, font, max(1, w - 4))
+          lines_to_draw = wrap_text_pil(text, font, max(1, w - 2))
 
-        # Calculate line height in mm
-        if hasattr(font, 'getbbox'):
-          bbox = font.getbbox("A")
-          line_h_px = bbox[3] - bbox[1]
+        # Calculate line height in mm (font-aware slot + gap, see fit loop above)
+        if hasattr(font, 'getmetrics'):
+          ascent, descent = font.getmetrics()
+          base = ascent + descent
+        elif hasattr(font, 'getbbox'):
+          bbox = font.getbbox("ÅgyQj|महाकविपूँ")
+          base = bbox[3] - bbox[1]
         else:
-          line_h_px = font_size_px
-
-        line_h_mm = line_h_px / pixels_per_mm
-        line_spacing_mm = line_h_mm * 0.25
+          base = int(font_size_px * 1.2)
+        slot_px = max(int(font_size_px * 1.2), base)
+        if script_kind == "indic":
+          slot_px += int(font_size_px * 0.30)
+        elif script_kind in ("arabic", "thai"):
+          slot_px += int(font_size_px * 0.20)
+        else:
+          slot_px += int(font_size_px * 0.10)
+        gap_px = max(2, int(slot_px * 0.25))
+        line_h_px = slot_px
+        line_h_mm = slot_px / pixels_per_mm
+        line_spacing_mm = gap_px / pixels_per_mm
         line_height_total_mm = line_h_mm + line_spacing_mm
         total_text_h_mm = len(lines_to_draw) * line_height_total_mm - line_spacing_mm
 
@@ -882,27 +1258,30 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
               temp_draw.text((cx_px + 1, cy_px), line, font=font, fill=text_color, anchor="mm")
 
       else:
-        # Auto-adjust font size so single-line text NEVER overflows element width or height
-        min_size = max(4, int(round(4.0 * (dpi / 72.0))))
-        max_allowed_w_px = max(10, min(w - 4, width_px - x - 1))
+        # Auto-adjust font size so single-line text fits element width & height
+        if auto_shrink:
+          min_size = max(4, int(round(4.0 * (dpi / 72.0))))
+          max_allowed_w_px = max(10, min(w, width_px - x))
 
-        while font_size_px > min_size:
-          font = _load_font(font_size_px)
-          if hasattr(temp_draw, 'textbbox'):
-            bbox = temp_draw.textbbox((0, 0), text, font=font)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
-          elif hasattr(font, 'getbbox'):
-            bbox = font.getbbox(text)
-            text_w = bbox[2] - bbox[0]
-            text_h = bbox[3] - bbox[1]
+          while font_size_px > min_size:
+            font = _load_font(font_size_px)
+            if hasattr(font, 'getlength'):
+              text_w = font.getlength(clean_text)
+            elif hasattr(temp_draw, 'textbbox'):
+              bbox = temp_draw.textbbox((0, 0), clean_text, font=font)
+              text_w = bbox[2] - bbox[0]
+            elif hasattr(font, 'getbbox'):
+              bbox = font.getbbox(clean_text)
+              text_w = bbox[2] - bbox[0]
+            else:
+              text_w = len(clean_text) * font_size_px * 0.55
+
+            font_h_mm = (font_size_px * 0.75) / pixels_per_mm
+            if text_w <= max_allowed_w_px and font_h_mm <= el_h:
+              break
+            font_size_px -= 1
           else:
-            text_w, text_h = temp_draw.textsize(text, font=font) if hasattr(temp_draw, 'textsize') else (100, 20)
-
-          text_h_mm = text_h / pixels_per_mm
-          if text_w <= max_allowed_w_px and (not auto_shrink or text_h_mm <= el_h):
-            break
-          font_size_px -= 1
+            font = _load_font(font_size_px)
         else:
           font = _load_font(font_size_px)
           
@@ -929,9 +1308,9 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
           raw_x = last_text_end_x_px + spacing_gap_px
           x = max(min_x_px, min(raw_x, max_x_px - 1))
 
-        # Center vertically and align horizontally inside the element box using mm coordinates with 1.5mm internal padding offset
-        pad_x_mm = max(safe_margin_mm, el_x)
-        pad_y_mm = max(safe_margin_mm, el_y)
+        # Center vertically and align horizontally inside the element box using exact canvas coordinates
+        pad_x_mm = el_x
+        pad_y_mm = el_y
         if text_align == "center":
           draw_cx_mm = pad_x_mm + el_w / 2.0
         elif text_align == "right":
@@ -945,11 +1324,11 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
         draw_cx_px = int(round(draw_cx_mm * pixels_per_mm))
         draw_cy_px = int(round(draw_cy_mm * pixels_per_mm))
 
-        # Clamp drawing center within 1.5mm safe margin boundaries so text never bleeds outside the page
+        # Clamp drawing center within canvas boundaries so text never bleeds outside the page
         text_half_w_px = int(round(text_w / 2.0))
         text_half_h_px = int(round(text_h / 2.0))
-        draw_cx_px = max(min_x_px + text_half_w_px, min(draw_cx_px, max_x_px - text_half_w_px))
-        draw_cy_px = max(min_y_px + text_half_h_px, min(draw_cy_px, max_y_px - text_half_h_px))
+        draw_cx_px = max(text_half_w_px, min(draw_cx_px, width_px - text_half_w_px))
+        draw_cy_px = max(text_half_h_px, min(draw_cy_px, height_px - text_half_h_px))
 
         if not wrap_text:
           last_text_end_x_px = draw_cx_px + text_half_w_px
@@ -1157,6 +1536,7 @@ def print_batch_to_spooler(
   quality: str = "auto",
   dpi_override: Optional[int] = None,
   native_mode: bool = True,
+  **kwargs,
 ) -> Dict[str, Any]:
   """
   Route a batch print job to the appropriate printer driver.
@@ -1188,6 +1568,7 @@ def print_batch_to_spooler(
       printer_name, records, copies, template,
       quality=quality, dpi_override=dpi_override,
       native_mode=native_mode,
+      **kwargs,
     )
   except ImportError as imp_err:
     # Driver module not available - fall back to original GDI implementation
@@ -1195,13 +1576,13 @@ def print_batch_to_spooler(
       f"[PrintService] Driver router import failed ({imp_err}), "
       f"falling back to legacy GDI path."
     )
-    return _legacy_gdi_print(printer_name, records, copies, template, quality, dpi_override)
+    return _legacy_gdi_print(printer_name, records, copies, template, quality, dpi_override, **kwargs)
   except Exception as ex:
     logger.error(f"[PrintService] Driver error: {ex}", exc_info=True)
     return {"success": False, "message": str(ex)}
 
 
-def _legacy_gdi_print(printer_name: str, records: List[Dict[str, Any]], copies: int, template: Dict[str, Any], quality: str = "auto", dpi_override: Optional[int] = None) -> Dict[str, Any]:
+def _legacy_gdi_print(printer_name: str, records: List[Dict[str, Any]], copies: int, template: Dict[str, Any], quality: str = "auto", dpi_override: Optional[int] = None, **kwargs) -> Dict[str, Any]:
   """
   Legacy GDI print path - used as an emergency fallback if the driver
   architecture cannot be imported. It delegates to the GDIDriver so the
@@ -1213,6 +1594,7 @@ def _legacy_gdi_print(printer_name: str, records: List[Dict[str, Any]], copies: 
     return GDIDriver().print_batch(
       printer_name, records, copies, template,
       quality=quality, dpi_override=dpi_override,
+      **kwargs,
     )
   except Exception as ex:
     logger.error(f"[LegacyGDI] Fallback delegation failed: {ex}", exc_info=True)

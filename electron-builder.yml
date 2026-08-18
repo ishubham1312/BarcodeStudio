@@ -7,8 +7,8 @@ files:
   - dist-electron/**/*
   - package.json
 extraResources:
-  - from: backend/dist/BarCode Services.exe'
-    to: backend/BarCode Services.exe'
+  - from: backend/dist/services.exe
+    to: backend/services.exe
   - from: backend
     to: backend
     filter:
@@ -17,7 +17,7 @@ extraResources:
       - "!dist/**/*"
       - "!__pycache__/**/*"
       - "!*.spec"
-      - "!BarCode Services.exe"
+      - "!services.exe"
 win:
   target: nsis
   icon: assets/logo.ico

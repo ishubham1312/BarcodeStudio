@@ -23,6 +23,7 @@ import {
 import logoUrl from "@/assets/logo.png";
 import { SettingsView } from "./SettingsView";
 import { HistoryView } from "./HistoryView";
+import { ConfirmModal } from "./ConfirmModal";
 import { useElectronAPI } from "../hooks/useElectronAPI";
 import {
   prepareTemplateForLoadOrImport,
@@ -82,6 +83,7 @@ export const Home: React.FC<HomeProps> = ({
   const [newShortcutName, setNewShortcutName] = useState("");
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
   const [savedUserTemplates, setSavedUserTemplates] = useState<LabelTemplate[]>([]);
+  const [templateToDelete, setTemplateToDelete] = useState<LabelTemplate | null>(null);
 
   const translateOldId = (id: string): string => {
     if (id === "spine-75-38" || id === "t-spine-std") return defaultTemplates[0]?.id || "t-spine-std";
@@ -89,7 +91,7 @@ export const Home: React.FC<HomeProps> = ({
     return id;
   };
 
-  useEffect(() => {
+  const loadSavedTemplates = () => {
     const savedStr = localStorage.getItem("windows_barcode_studio_saved_templates");
     if (savedStr) {
       try {
@@ -97,8 +99,53 @@ export const Home: React.FC<HomeProps> = ({
       } catch (e) {
         console.error(e);
       }
+    } else {
+      setSavedUserTemplates([]);
     }
+  };
+
+  useEffect(() => {
+    loadSavedTemplates();
   }, [showAddShortcutModal]);
+
+  useEffect(() => {
+    const handleStorage = () => {
+      loadSavedTemplates();
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  const handleConfirmDeleteTemplate = () => {
+    if (!templateToDelete) return;
+    const id = templateToDelete.id;
+
+    // Remove from saved templates in localStorage
+    const savedStr = localStorage.getItem("windows_barcode_studio_saved_templates");
+    let userSaved: LabelTemplate[] = [];
+    if (savedStr) {
+      try {
+        userSaved = JSON.parse(savedStr);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    const updated = userSaved.filter((t) => t.id !== id);
+    localStorage.setItem("windows_barcode_studio_saved_templates", JSON.stringify(updated));
+    setSavedUserTemplates(updated);
+
+    // Remove from shortcut selection if selected
+    setSelectedTemplateIds((prev) => prev.filter((item) => item !== id));
+
+    // Remove from pinned templates if pinned
+    setPinnedIds((prev) => {
+      const next = prev.filter((item) => item !== id);
+      localStorage.setItem("barcode_studio_pinned_templates", JSON.stringify(next));
+      return next;
+    });
+
+    setTemplateToDelete(null);
+  };
 
   const combinedTemplates = [...savedUserTemplates, ...defaultTemplates].filter(
     (item, index, self) => self.findIndex((t) => t.id === item.id) === index,
@@ -891,37 +938,65 @@ export const Home: React.FC<HomeProps> = ({
                 </div>
 
                 <div className="border border-metro-border rounded-xl bg-metro-input/40 p-2.5 max-h-48 overflow-y-auto space-y-1">
-                  {combinedTemplates.map((t) => {
-                    const isSelected = selectedTemplateIds.includes(t.id);
-                    return (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => handleToggleTemplateSelection(t.id)}
-                        className={`w-full flex items-center justify-between p-2 rounded-lg text-left text-xs font-semibold transition-all cursor-pointer ${isSelected
-                          ? "bg-metro-accent/15 text-metro-accent border border-metro-accent/30"
-                          : "hover:bg-metro-header text-metro-secondary border border-transparent"
-                          }`}
-                      >
-                        <div>
-                          <span className="block text-xs font-bold">
-                            {t.name}
-                          </span>
-                          <span className="block text-[9px] opacity-75 font-mono">
-                            {t.widthMm}x{t.heightMm} mm
-                          </span>
-                        </div>
+                  {combinedTemplates.length === 0 ? (
+                    <div className="py-6 text-center text-metro-secondary text-xs">
+                      No design layouts available.
+                    </div>
+                  ) : (
+                    combinedTemplates.map((t) => {
+                      const isSelected = selectedTemplateIds.includes(t.id);
+                      const isDefault = defaultTemplates.some((dt) => dt.id === t.id);
+                      return (
                         <div
-                          className={`w-4 h-4 rounded border flex items-center justify-center ${isSelected
-                            ? "bg-metro-accent border-metro-accent text-white"
-                            : "border-metro-border"
+                          key={t.id}
+                          onClick={() => handleToggleTemplateSelection(t.id)}
+                          className={`w-full flex items-center justify-between p-2 rounded-lg text-left text-xs font-semibold transition-all cursor-pointer group ${isSelected
+                            ? "bg-metro-accent/15 text-metro-accent border border-metro-accent/30"
+                            : "hover:bg-metro-header text-metro-secondary hover:text-metro-primary border border-transparent"
                             }`}
                         >
-                          {isSelected && <Check className="w-2.5 h-2.5" />}
+                          <div className="min-w-0 flex-1 pr-2">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="block text-xs font-bold truncate">
+                                {t.name}
+                              </span>
+                              {isDefault && (
+                                <span className="text-[8px] px-1.5 py-0.2 rounded font-bold font-mono tracking-wide bg-metro-header text-metro-secondary shrink-0">
+                                  SYSTEM
+                                </span>
+                              )}
+                            </div>
+                            <span className="block text-[9px] opacity-75 font-mono">
+                              {t.widthMm}x{t.heightMm} mm
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {!isDefault && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setTemplateToDelete(t);
+                                }}
+                                className="p-1.5 rounded-lg text-metro-secondary hover:text-red-400 hover:bg-red-500/10 opacity-70 hover:opacity-100 transition-all cursor-pointer"
+                                title="Delete template"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <div
+                              className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${isSelected
+                                ? "bg-metro-accent border-metro-accent text-white"
+                                : "border-metro-border bg-metro-input"
+                                }`}
+                            >
+                              {isSelected && <Check className="w-2.5 h-2.5" />}
+                            </div>
+                          </div>
                         </div>
-                      </button>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
               </div>
             </div>
@@ -992,6 +1067,19 @@ export const Home: React.FC<HomeProps> = ({
           </div>
         </div>
       )}
+
+      {/* --- CONFIRM DELETE TEMPLATE MODAL --- */}
+      <ConfirmModal
+        isOpen={!!templateToDelete}
+        title="Delete Template"
+        message={`Are you sure you want to delete "${templateToDelete?.name}"? This action cannot be undone.`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        variant="danger"
+        theme={theme}
+        onConfirm={handleConfirmDeleteTemplate}
+        onClose={() => setTemplateToDelete(null)}
+      />
 
 
     </div>

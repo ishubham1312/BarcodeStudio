@@ -142,10 +142,10 @@ def _resolve_value(el: Dict[str, Any], record: Dict[str, Any]) -> str:
 
 
 def _get_font_for_text(font_family: str, bold: bool, italic: bool, text: str, size_px: int) -> ImageFont.ImageFont:
-    """Font loader utility loading local .ttf font files with automatic Nirmala UI fallback for Devnagari/Hindi."""
+    """Font loader utility loading local .ttf font files with automatic Noto Sans UI fallback for Devnagari/Hindi."""
     has_devnagari = any(0x0900 <= ord(c) <= 0x0D7F for c in text)
     if has_devnagari:
-        font_family = "nirmala"
+        font_family = "Noto Sans"
 
     size_px = max(4, int(size_px))
 
@@ -174,16 +174,9 @@ def _get_font_for_text(font_family: str, bold: bool, italic: bool, text: str, si
         bundled_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "fonts")
 
     candidate_paths = []
-    if has_devnagari or "nirmala" in font_family.lower():
-        nirmala_name = "nirmala-bold.ttf" if bold else "nirmala.ttf"
-        candidate_paths.extend([
-            os.path.join(bundled_dir, nirmala_name),
-            os.path.join(bundled_dir, "NirmalaB.ttf" if bold else "Nirmala.ttf"),
-            os.path.join("C:\\Windows\\Fonts", "nirmala-bold.ttf" if bold else "nirmala.ttf"),
-            os.path.join("C:\\Windows\\Fonts", "nirmalab.ttf" if bold else "nirmala.ttf"),
-            os.path.join("C:\\Windows\\Fonts", "NirmalaB.ttf" if bold else "Nirmala.ttf"),
-            "C:\\Windows\\Fonts\\Nirmala.ttc",
-        ])
+    if has_devnagari or "noto sans" in font_family.lower() or "Noto Sans" in font_family.lower():
+        noto_bundled = os.path.join(bundled_dir, "Noto Sans.ttf")
+        candidate_paths.append(noto_bundled)
     else:
         candidate_paths.extend([
             os.path.join(bundled_dir, "arialbd.ttf" if bold else "arial.ttf"),
@@ -195,6 +188,8 @@ def _get_font_for_text(font_family: str, bold: bool, italic: bool, text: str, si
     for font_path in candidate_paths:
         if font_path and os.path.exists(font_path):
             try:
+                if (has_devnagari or "noto sans" in font_family.lower() or "Noto Sans" in font_family.lower()) and getattr(ImageFont.Layout, "RAQM", None) is not None:
+                    return ImageFont.truetype(font_path, size_px, layout_engine=ImageFont.Layout.RAQM)
                 return ImageFont.truetype(font_path, size_px)
             except Exception:
                 continue
@@ -209,20 +204,24 @@ def _render_text_element_to_pil(el: Dict[str, Any], text: str, w_dots: int, h_do
 
     font_family = str(el.get("fontFamily", "Segoe UI")).strip()
     font_size_pt = float(el.get("fontSize", 10))
+    font_size_px = int(round(font_size_pt * (dpi / 72.0)))
     fw_val = str(el.get("fontWeight", "")).lower()
     bold = fw_val in ("bold", "700", "800", "900") or el.get("bold") is True or el.get("fontWeight") == 700
     italic = el.get("fontStyle") == "italic"
     text_align = str(el.get("textAlign", "left")).lower()
     wrap_text = bool(el.get("wrapText", False))
     auto_shrink = bool(el.get("autoShrink", False))
+    auto_expand = bool(el.get("autoExpand", False))
+    is_auto_sizing = auto_shrink or auto_expand
 
-    font_size_px = int(round(font_size_pt * (dpi / 72.0)))
-    font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
+    from backend.services.printer_service import compute_text_layout
 
     has_devnagari = any(0x0900 <= ord(c) <= 0x0D7F for c in text)
+    # Small canvas padding so tall Devanagari matras are never clipped at the
+    # element edges (the per-line gap is already handled inside compute_text_layout).
     if has_devnagari:
-        top_padding = int(round(font_size_px * 0.35))
-        bottom_padding = int(round(font_size_px * 0.25))
+        top_padding = int(round(font_size_px * 0.15))
+        bottom_padding = int(round(font_size_px * 0.10))
         side_padding = max(4, int(round(font_size_px * 0.10)))
     else:
         top_padding = 0
@@ -236,137 +235,44 @@ def _render_text_element_to_pil(el: Dict[str, Any], text: str, w_dots: int, h_do
     img = Image.new("L", (canvas_w, canvas_h), 255)
     draw = ImageDraw.Draw(img)
 
-    def _measure_str(s: str, fnt) -> float:
-        if hasattr(fnt, 'getlength'):
-            return fnt.getlength(s)
-        elif hasattr(fnt, 'getbbox'):
-            bb = fnt.getbbox(s)
-            return bb[2] - bb[0]
-        return len(s) * 8.0
-
-    def wrap_text_pil(txt: str, fnt, max_w: int) -> List[str]:
-        is_cjk_no_spaces = any(
-            (0x4E00 <= ord(c) <= 0x9FFF) or
-            (0x3040 <= ord(c) <= 0x30FF) or
-            (0xAC00 <= ord(c) <= 0xD7AF)
-            for c in txt
-        )
-
-        wrapped_lines: List[str] = []
-        paragraphs = txt.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-
-        for para in paragraphs:
-            if not para.strip():
-                wrapped_lines.append("")
-                continue
-
-            if is_cjk_no_spaces:
-                curr_line = ""
-                for char in para:
-                    test = curr_line + char
-                    if _measure_str(test, fnt) <= max_w:
-                        curr_line = test
-                    else:
-                        if curr_line:
-                            wrapped_lines.append(curr_line)
-                        curr_line = char
-                if curr_line:
-                    wrapped_lines.append(curr_line)
-            else:
-                words = para.split(" ")
-                curr_line_words: List[str] = []
-                for word in words:
-                    test_line = " ".join(curr_line_words + [word]) if curr_line_words else word
-                    if _measure_str(test_line, fnt) <= max_w:
-                        curr_line_words.append(word)
-                    else:
-                        if curr_line_words:
-                            wrapped_lines.append(" ".join(curr_line_words))
-                            curr_line_words = []
-
-                        if _measure_str(word, fnt) > max_w:
-                            part = ""
-                            for char in word:
-                                if _measure_str(part + char, fnt) <= max_w:
-                                    part += char
-                                else:
-                                    if part:
-                                        wrapped_lines.append(part)
-                                    part = char
-                            if part:
-                                curr_line_words = [part]
-                        else:
-                            curr_line_words = [word]
-                if curr_line_words:
-                    wrapped_lines.append(" ".join(curr_line_words))
-
-        return wrapped_lines if wrapped_lines else [txt]
-
     fill_color = 0  # 0 = Pure black text on white background in mode L
 
-    if wrap_text:
-        min_size_px = max(4, int(round(4.0 * (dpi / 72.0))))
-        while font_size_px > min_size_px:
-            font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
-            lines = wrap_text_pil(text, font, max(1, w_px - 4))
-            line_h_px = font.getbbox("A")[3] - font.getbbox("A")[1] if hasattr(font, 'getbbox') else font_size_px
-            line_spacing_px = max(1, int(line_h_px * 0.25))
-            tot_h = len(lines) * (line_h_px + line_spacing_px) - line_spacing_px
-            max_line_w = max(_measure_str(l, font) for l in lines) if lines else 0
+    layout = compute_text_layout(
+        text, font_family, bold, italic, w_px, h_px, dpi,
+        font_size_pt=font_size_pt,
+        wrap_text=wrap_text,
+        auto_shrink=auto_shrink,
+        auto_expand=auto_expand,
+        text_align=text_align,
+    )
+    font = layout["font"]
+    lines = layout["lines"]
+    slot = layout["slot_h_px"]
+    gap = layout["line_gap_px"]
+    start_y = layout["start_y_px"]
 
-            if tot_h <= h_px and max_line_w <= max(1, w_px - 4):
-                break
-            if not auto_shrink and tot_h <= h_px * 1.05 and max_line_w <= w_px:
-                break
-            font_size_px -= 1
-        else:
-            font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
-            lines = wrap_text_pil(text, font, max(1, w_px - 4))
+    def _measure_str(s, fnt):
+        if hasattr(fnt, 'getlength'):
+            return fnt.getlength(s)
+        if hasattr(fnt, 'getbbox'):
+            return fnt.getbbox(s)[2] - fnt.getbbox(s)[0]
+        return len(s) * 8.0
 
-        line_h_px = font.getbbox("A")[3] - font.getbbox("A")[1] if hasattr(font, 'getbbox') else font_size_px
-        line_spacing_px = max(1, int(line_h_px * 0.25))
-        line_height_total = line_h_px + line_spacing_px
-        total_text_h = len(lines) * line_height_total - line_spacing_px
-        start_y = top_padding + max(0, (h_px - total_text_h) // 2)
-
-        for i, line in enumerate(lines):
-            line_w = _measure_str(line, font)
-            if text_align == "center":
-                cx = side_padding + w_px // 2
-            elif text_align == "right":
-                cx = side_padding + max(0, int(w_px - line_w / 2.0))
-            else:
-                cx = side_padding + int(line_w / 2.0)
-            cy = start_y + i * line_height_total + line_h_px // 2
-            if cy <= canvas_h:
-                draw.text((cx, cy), line, font=font, fill=fill_color, anchor="mm")
-                if bold:
-                    draw.text((cx + 1, cy), line, font=font, fill=fill_color, anchor="mm")
-    else:
-        # Auto-adjust font size so single-line text fits element width & height
-        min_size_px = max(4, int(round(4.0 * (dpi / 72.0))))
-        while font_size_px > min_size_px:
-            font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
-            tw = _measure_str(text, font)
-            th = font.getbbox("A")[3] - font.getbbox("A")[1] if hasattr(font, 'getbbox') else font_size_px
-            if tw <= max(1, w_px - 4) and (not auto_shrink or th <= h_px):
-                break
-            font_size_px -= 1
-        else:
-            font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
-
-        tw = _measure_str(text, font)
+    for i, line in enumerate(lines):
+        line_w = _measure_str(line, font)
         if text_align == "center":
-            cx = side_padding + w_px // 2
+            cx = side_padding + w_px / 2.0
         elif text_align == "right":
-            cx = side_padding + max(0, int(w_px - tw / 2.0))
+            cx = side_padding + max(0.0, w_px - line_w / 2.0)
         else:
-            cx = side_padding + int(tw / 2.0)
-        cy = top_padding + h_px // 2
-
-        draw.text((cx, cy), text, font=font, fill=fill_color, anchor="mm")
-        if bold:
-            draw.text((cx + 1, cy), text, font=font, fill=fill_color, anchor="mm")
+            cx = side_padding + line_w / 2.0
+        cy = top_padding + start_y + i * (slot + gap) + slot / 2.0
+        cx_px = int(round(cx))
+        cy_px = int(round(cy))
+        if 0 <= cy_px <= canvas_h:
+            draw.text((cx_px, cy_px), line, font=font, fill=fill_color, anchor="mm")
+            if bold:
+                draw.text((cx_px + 1, cy_px), line, font=font, fill=fill_color, anchor="mm")
 
     # Hard binary thresholding at 128 (values < 128 -> pure black 0, >= 128 -> pure white 255)
     return img.point(lambda p: 0 if p < 128 else 255, mode="1")
@@ -641,6 +547,7 @@ class ZPLDriver(PrinterDriverInterface):
                         has_non_ascii = any(ord(c) > 127 for c in val)
                         wrap_text = bool(el.get("wrapText", False))
                         auto_shrink = bool(el.get("autoShrink", False))
+                        auto_expand = bool(el.get("autoExpand", False))
                         fw = str(el.get("fontWeight", "")).lower()
                         is_bold = fw in ("bold", "700", "800", "900") or el.get("bold") is True or el.get("fontWeight") == 700
                         is_italic = el.get("fontStyle") == "italic"
@@ -655,16 +562,15 @@ class ZPLDriver(PrinterDriverInterface):
                             spacing_gap_mm = max(1.0, el_x - last_text_container_end_x_mm) if el_x > last_text_container_end_x_mm else 1.5
                             spacing_gap_dots = int(round(spacing_gap_mm * dots_per_mm))
                             raw_x_dots = last_text_end_x_dots + spacing_gap_dots
-                            logger.info(f"[ZPL] Dynamically adjusting inline text X position to {raw_x_dots} dots for val='{val}'")
 
                         clamped_x, clamped_y, clamped_w, clamped_h = _clamp_element_bounds(
                             raw_x_dots, raw_y_dots, raw_w_dots, raw_h_dots, min_x, max_x, min_y, max_y
                         )
 
-                        # Convert custom fonts, non-ASCII text, wrapped text, auto-shrunk text, or styled text to 1-bit monochrome graphic ^GF
-                        use_graphic_text = is_custom_font or has_non_ascii or wrap_text or auto_shrink or is_bold or is_italic
+                        is_mixed_nowrap = has_non_ascii and not wrap_text and not auto_shrink and not auto_expand and el_rot in (0, 360)
+                        is_full_pil = wrap_text or auto_shrink or auto_expand or (has_non_ascii and el_rot not in (0, 360)) or (is_custom_font and not is_mixed_nowrap) or (is_bold and not is_mixed_nowrap) or (is_italic and not is_mixed_nowrap)
 
-                        if use_graphic_text:
+                        if is_full_pil:
                             pil_img = _render_text_element_to_pil(el, val, clamped_w, clamped_h, dpi)
                             cropped_img, offset_x, offset_y = _trim_text_image(pil_img, val)
 
@@ -688,6 +594,74 @@ class ZPLDriver(PrinterDriverInterface):
                                 last_text_container_end_x_mm = el_x + el_w
                             else:
                                 last_text_end_x_dots = -1
+
+                        elif is_mixed_nowrap:
+                            import re
+                            chunks = []
+                            for match in re.finditer(r'[^\x00-\x7F]+|[\x00-\x7F]+', val):
+                                chunk_text = match.group(0)
+                                is_ascii = True
+                                try:
+                                    chunk_text.encode('ascii')
+                                except UnicodeEncodeError:
+                                    is_ascii = False
+                                chunks.append({"text": chunk_text, "is_ascii": is_ascii})
+
+                            font_size = float(el.get("fontSize", 10))
+                            font_h_dots = max(8, int(round((font_size / 72.0 * 25.4) * dots_per_mm)))
+                            font_w_dots = int(round(font_h_dots * 0.90))
+
+                            total_w_d = 0
+                            chunk_widths = []
+                            chunk_images = []
+
+                            for chunk in chunks:
+                                if chunk["is_ascii"] and not (is_custom_font or is_bold or is_italic):
+                                    cw = int(round(len(chunk["text"]) * font_w_dots))
+                                    chunk_widths.append(cw)
+                                    chunk_images.append(None)
+                                    total_w_d += cw
+                                else:
+                                    el_chunk = dict(el)
+                                    el_chunk["textAlign"] = "left"
+                                    c_img = _render_text_element_to_pil(el_chunk, chunk["text"], page_w_dots, font_h_dots, dpi)
+                                    c_img, ox, oy = _trim_text_image(c_img, chunk["text"])
+                                    cw = c_img.width
+                                    chunk_widths.append(cw)
+                                    chunk_images.append((c_img, ox, oy))
+                                    total_w_d += cw
+
+                            text_align = str(el.get("textAlign", "left")).lower()
+                            curr_x_dots = raw_x_dots
+                            if text_align == "center":
+                                curr_x_dots = max(raw_x_dots, int(raw_x_dots + (raw_w_dots - total_w_d) / 2))
+                            elif text_align == "right":
+                                curr_x_dots = max(raw_x_dots, int(raw_x_dots + raw_w_dots - total_w_d))
+
+                            for chunk, cw, c_img_data in zip(chunks, chunk_widths, chunk_images):
+                                clamped_cx, clamped_cy, _, _ = _clamp_element_bounds(
+                                    curr_x_dots, raw_y_dots, cw, font_h_dots, min_x, max_x, min_y, max_y
+                                )
+
+                                if chunk["is_ascii"] and not (is_custom_font or is_bold or is_italic):
+                                    safe_val = chunk["text"].replace('"', '\\"')
+                                    zpl_lines.append(
+                                        f"^FO{clamped_cx},{clamped_cy}^A0{orient_code},{font_h_dots},{font_w_dots}"
+                                        f"^FB{cw},1,0,L^FD{safe_val}^FS"
+                                    )
+                                else:
+                                    c_img, ox, oy = c_img_data
+                                    real_x = max(min_x, min(clamped_cx + ox, max_x - 1))
+                                    real_y = max(min_y, min(clamped_cy + oy, max_y - 1))
+                                    gf_zpl = _image_to_zpl_gf(c_img, real_x, real_y)
+                                    zpl_lines.append(gf_zpl.strip())
+
+                                curr_x_dots += cw
+
+                            last_text_end_x_dots = curr_x_dots
+                            last_text_y_mm = el_y
+                            last_text_container_end_x_mm = el_x + el_w
+
                         else:
                             font_size = float(el.get("fontSize", 10))
                             font_h_dots = max(8, int(round((font_size / 72.0 * 25.4) * dots_per_mm)))

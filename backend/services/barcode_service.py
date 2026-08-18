@@ -121,37 +121,40 @@ def generate_1d_barcode(barcode_type: str, value: str, options: Optional[Dict[st
         is_bold = font_weight == 'bold'
         is_italic = font_style == 'italic'
 
-        font_dir = "C:\\Windows\\Fonts\\"
-        font_file = "arial.ttf"
-        if is_bold and is_italic:
-            font_file = "arialbi.ttf"
-        elif is_bold:
-            font_file = "arialbd.ttf"
-        elif is_italic:
-            font_file = "ariali.ttf"
-
-        font_path = os.path.join(font_dir, font_file)
-        if not os.path.exists(font_path):
-            # Fallback to Segoe UI
-            segoe_file = "segoeui.ttf"
+        has_indic = any(0x0900 <= ord(c) <= 0x0D7F for c in value)
+        
+        if has_indic:
+            bundled_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "fonts")
+            font_path = os.path.join(bundled_dir, "Noto Sans.ttf")
+            if not os.path.exists(font_path):
+                # Fallback if bundled doesn't exist for some reason
+                font_path = os.path.join("C:\\Windows\\Fonts\\", "arial.ttf")
+        else:
+            font_dir = "C:\\Windows\\Fonts\\"
+            font_file = "arial.ttf"
             if is_bold and is_italic:
-                segoe_file = "segoeuiz.ttf"
+                font_file = "arialbi.ttf"
             elif is_bold:
-                segoe_file = "segoeuib.ttf"
+                font_file = "arialbd.ttf"
             elif is_italic:
-                segoe_file = "segoeuii.ttf"
-            font_path = os.path.join(font_dir, segoe_file)
-
+                font_file = "ariali.ttf"
+    
             font_path = os.path.join(font_dir, font_file)
-        if not os.path.exists(font_path):
-            #Nirmala UI
-            nirmala_file = "nirmala.ttf"
-            if is_bold and is_italic:
-                nirmala_file = "nirmali.ttf"
-            elif is_bold:
-                nirmala_file = "nirmal-bold.ttf"
-            elif is_italic:
-                nirmala_file = "nirmali.ttf"
+            if not os.path.exists(font_path):
+                # Fallback to Segoe UI
+                segoe_file = "segoeui.ttf"
+                if is_bold and is_italic:
+                    segoe_file = "segoeuiz.ttf"
+                elif is_bold:
+                    segoe_file = "segoeuib.ttf"
+                elif is_italic:
+                    segoe_file = "segoeuii.ttf"
+                font_path = os.path.join(font_dir, segoe_file)
+    
+            if not os.path.exists(font_path):
+                # Ultimate fallback
+                bundled_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "fonts")
+                font_path = os.path.join(bundled_dir, "Noto Sans.ttf")
 
         # Calculate dynamic text distance to compensate for python-barcode's internal point-to-pixel unit mismatch
         base_margin = float(text_margin_mm) if text_margin_mm is not None else 1.5

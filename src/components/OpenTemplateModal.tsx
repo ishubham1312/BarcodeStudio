@@ -162,6 +162,15 @@ export const OpenTemplateModal: React.FC<OpenTemplateModalProps> = ({
     const updated = userSaved.filter((t) => t.id !== id);
     localStorage.setItem("windows_barcode_studio_saved_templates", JSON.stringify(updated));
     
+    try {
+      const pinnedStr = localStorage.getItem("barcode_studio_pinned_templates");
+      if (pinnedStr) {
+        const pinned: string[] = JSON.parse(pinnedStr);
+        const nextPinned = pinned.filter((pId) => pId !== id);
+        localStorage.setItem("barcode_studio_pinned_templates", JSON.stringify(nextPinned));
+      }
+    } catch {}
+
     setSavedTemplates((prev) => prev.filter((t) => t.id !== id));
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -175,7 +184,7 @@ export const OpenTemplateModal: React.FC<OpenTemplateModalProps> = ({
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const fileList = Array.from(files);
+    const fileList: File[] = Array.from(files);
     const importedTemplates: LabelTemplate[] = [];
     const importedIds = new Set<string>();
 

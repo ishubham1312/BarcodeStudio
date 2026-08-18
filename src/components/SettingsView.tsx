@@ -2510,7 +2510,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         BarCode Studio
                       </h3>
                       <span className="text-[10px] font-mono font-extrabold bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 px-3 py-0.5 rounded-full uppercase tracking-wider">
-                        v3.6.1 Pro
+                        v3.7.1 Pro
                       </span>
                     </div>
                     <p className="text-xs text-metro-secondary mt-1 leading-relaxed">

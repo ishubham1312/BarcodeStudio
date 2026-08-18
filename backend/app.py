@@ -47,6 +47,16 @@ import time
 logger = setup_logger()
 logger.info("Initializing Barcode Studio Python API server...")
 
+# Check and log Complex Text Layout availability
+try:
+    import PIL.features
+    is_raqm_available = PIL.features.check_feature("raqm")
+    logger.info(f"[Font Engine] HarfBuzz / Raqm Complex Layout Engine Available: {is_raqm_available}")
+    if not is_raqm_available:
+        logger.warning("[Font Engine] WARNING: Raqm/HarfBuzz is NOT available. Hindi/Complex scripts will render incorrectly.")
+except Exception as e:
+    logger.warning(f"[Font Engine] Failed to verify Raqm feature: {e}")
+
 # Initialize Telemetry Reporting Service
 telemetry_service = TelemetryReporter(
     email_address="thesickeditz@gmail.com",
@@ -201,8 +211,13 @@ def printers_print_batch():
   quality = data.get("quality", "auto")
   dpi_override = data.get("dpiOverride")
   native_mode = data.get("nativeMode", True)
+  calibration = data.get("calibration", {})
   try:
-    result = print_batch_to_spooler(printer_name, records, copies, template, quality, dpi_override, native_mode=native_mode)
+    result = print_batch_to_spooler(
+      printer_name, records, copies, template,
+      quality, dpi_override, native_mode=native_mode,
+      calibration=calibration
+    )
     return jsonify(result)
   except Exception as e:
     return jsonify({"success": False, "message": str(e)}), 500
@@ -297,7 +312,7 @@ def get_system_fonts_api():
     _cached_fonts = sorted(list(families))
     return jsonify({"success": True, "fonts": _cached_fonts})
   except Exception as e:
-    fallbacks = ['Segoe UI', 'Arial', 'Courier New', 'Times New Roman', 'nirmala', 'nirmala-bold', 'Nirmala UI', 'Mangal']
+    fallbacks = ['Segoe UI', 'Arial', 'Courier New', 'Times New Roman', 'Noto Sans', 'Noto Sans-bold', 'Noto Sans UI', 'Noto Sans']
     return jsonify({"success": True, "fonts": fallbacks, "error": str(e)})
 
 @app.route('/api/printers/test-print', methods=['POST'])

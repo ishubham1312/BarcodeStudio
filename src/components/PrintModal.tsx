@@ -627,7 +627,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         setCalibRotation(pCalib.rotation !== undefined ? pCalib.rotation : 0);
         return;
       }
-    } catch (e) {}
+    } catch (e) { }
     setCalibOffsetX(0);
     setCalibOffsetY(0);
     setCalibScaleX(1.0);
@@ -640,7 +640,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     try {
       const stored = localStorage.getItem("barcode_studio_printer_calibrations");
       const calibs = stored ? JSON.parse(stored) : {};
-      
+
       const currentCalib = calibs[selectedPrinter.name] || {
         offsetX: 0,
         offsetY: 0,
@@ -648,18 +648,18 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         scaleY: 1.0,
         rotation: 0,
       };
-      
+
       currentCalib[key] = value;
       calibs[selectedPrinter.name] = currentCalib;
       localStorage.setItem("barcode_studio_printer_calibrations", JSON.stringify(calibs));
-      
+
       // Update local state
       if (key === "offsetX") setCalibOffsetX(value);
       if (key === "offsetY") setCalibOffsetY(value);
       if (key === "scaleX") setCalibScaleX(value);
       if (key === "scaleY") setCalibScaleY(value);
       if (key === "rotation") setCalibRotation(value);
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const [printerCaps, setPrinterCaps] = useState<any>(null);
@@ -980,7 +980,8 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           const baseFontSizePx = (el.fontSize || 10) * (25.4 / 72.0) * scale;
           const fontFamily = el.fontFamily || "Segoe UI";
           const wrapEnabled = (el as any).wrapText === true;
-          const finalFontSizePx = el.autoShrink
+          const isAutoSizing = el.autoShrink || el.autoExpand;
+          const finalFontSizePx = isAutoSizing
             ? getAutoShrunkWrappedFontSize(
               content,
               fontFamily,
@@ -989,11 +990,13 @@ export const PrintModal: React.FC<PrintModalProps> = ({
               elPixelH,
               wrapEnabled,
               fontWeight,
-              fontStyle
+              fontStyle,
+              Boolean(el.autoExpand),
+              Boolean(el.autoShrink)
             )
             : baseFontSizePx;
 
-          ctx.font = `${fontStyle} ${fontWeight} ${finalFontSizePx}px "${fontFamily}", "Segoe UI", system-ui, sans-serif`;
+          ctx.font = `${fontStyle} ${fontWeight} ${finalFontSizePx}px "${fontFamily}", "Noto Sans UI", "Noto Sans", "Segoe UI", system-ui, sans-serif`;
 
           let textX = 0;
           if (el.textAlign === "center") {
@@ -1059,7 +1062,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
             };
 
             const wrappedLines = wrapTextCanvas(ctx, content, elPixelW);
-            const lineSpacing = 1.25;
+            const lineSpacing = 1.35;
             const lineHeight = finalFontSizePx * lineSpacing;
             const totalH = wrappedLines.length * lineHeight;
             const startY = Math.max(0, (elPixelH - totalH) / 2);
@@ -1073,7 +1076,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           } else {
             ctx.textBaseline = "middle";
             const textY = elPixelH / 2;
-            ctx.fillText(content, textX, textY, elPixelW);
+            ctx.fillText(content, textX, textY);
           }
         }
         ctx.restore();
@@ -1814,7 +1817,8 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           : "justify-start";
     const baseFontSizePx = (el.fontSize || 10) * (25.4 / 72.0) * mmToPx;
     const wrapEnabled = (el as any).wrapText === true;
-    const finalFontSizePx = el.autoShrink
+    const isAutoSizing = el.autoShrink || el.autoExpand;
+    const finalFontSizePx = isAutoSizing
       ? getAutoShrunkWrappedFontSize(
         content,
         el.fontFamily || "Segoe UI",
@@ -1823,7 +1827,9 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         elH * mmToPx,
         wrapEnabled,
         el.fontWeight,
-        el.fontStyle
+        el.fontStyle,
+        Boolean(el.autoExpand),
+        Boolean(el.autoShrink)
       )
       : baseFontSizePx;
 

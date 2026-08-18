@@ -440,7 +440,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
   const mappedFieldsList = React.useMemo(() => {
     if (!activeProfile) return [{ key: "AccessionNo", label: "Accession Number", physical: "AccessionNo" }];
     const mappings: Record<string, string> = activeProfile.fieldMappings || {};
-    
+
     // Get all mapped standard fields
     const list = Object.entries(mappings)
       .filter(([key, val]) => {
@@ -502,9 +502,20 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         // Map raw record fields using activeProfile field mappings
         const mappedRecord: any = { ...data.record };
         const fieldMappings = activeProfile.fieldMappings || {};
+        const recordAny = data.record as Record<string, any>;
         Object.entries(fieldMappings).forEach(([logicalKey, physCol]) => {
-          if (physCol && data.record[physCol] !== undefined) {
-            mappedRecord[logicalKey] = String(data.record[physCol]);
+          const colKey = physCol as string;
+          if (colKey) {
+            if (recordAny[colKey] !== undefined) {
+              mappedRecord[logicalKey] = String(recordAny[colKey]);
+            } else {
+              for (const [k, v] of Object.entries(recordAny)) {
+                if (k.toLowerCase() === colKey.toLowerCase()) {
+                  mappedRecord[logicalKey] = String(v ?? "");
+                  break;
+                }
+              }
+            }
           }
         });
 
@@ -772,10 +783,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         setSelectBox((prev) =>
           prev
             ? {
-                ...prev,
-                currentX: e.clientX,
-                currentY: e.clientY,
-              }
+              ...prev,
+              currentX: e.clientX,
+              currentY: e.clientY,
+            }
             : null,
         );
         return;
@@ -1355,7 +1366,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
               onSelectElement(null);
             }
           }
-          
+
           dragSelectCompletedRef.current = true;
           setTimeout(() => {
             dragSelectCompletedRef.current = false;
@@ -1622,10 +1633,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     if (activeUnit === 'in') {
       const startInch = Math.floor((-canvasLeftPx / mmToPx) / 25.4 * 10);
       const endInch = Math.ceil(((workspaceSize.width - canvasLeftPx) / mmToPx) / 25.4 * 10);
-      
+
       const safeStart = Math.max(-400, startInch);
       const safeEnd = Math.min(400, endInch);
-      
+
       const ticks = [];
       for (let i = safeStart; i <= safeEnd; i++) {
         const inchVal = i / 10;
@@ -1633,7 +1644,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         const tickLeft = canvasLeftPx + mmVal * mmToPx;
         const isLabel = i % 10 === 0;
         const isMedium = i % 5 === 0;
-        
+
         ticks.push(
           <div
             key={`h-tick-in-${i}`}
@@ -1701,10 +1712,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     if (activeUnit === 'in') {
       const startInch = Math.floor((-canvasTopPx / mmToPx) / 25.4 * 10);
       const endInch = Math.ceil(((workspaceSize.height - canvasTopPx) / mmToPx) / 25.4 * 10);
-      
+
       const safeStart = Math.max(-400, startInch);
       const safeEnd = Math.min(400, endInch);
-      
+
       const ticks = [];
       for (let i = safeStart; i <= safeEnd; i++) {
         const inchVal = i / 10;
@@ -1712,7 +1723,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         const tickTop = canvasTopPx + mmVal * mmToPx;
         const isLabel = i % 10 === 0;
         const isMedium = i % 5 === 0;
-        
+
         ticks.push(
           <div
             key={`v-tick-in-${i}`}
@@ -1778,29 +1789,32 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         {el.type === "text" && (() => {
           const wrapEnabled = (el as any).wrapText === true;
           const baseFontSizePx = (el.fontSize || 10) * (25.4 / 72.0) * mmToPx;
-          const finalFontSizePx = el.autoShrink
+          const isAutoSizing = el.autoShrink || el.autoExpand;
+          const finalFontSizePx = isAutoSizing
             ? getAutoShrunkWrappedFontSize(
-                renderedText,
-                el.fontFamily || "Segoe UI",
-                baseFontSizePx,
-                el.width * mmToPx,
-                el.height * mmToPx,
-                wrapEnabled,
-                el.fontWeight,
-                el.fontStyle
-              )
+              renderedText,
+              el.fontFamily || "Segoe UI",
+              baseFontSizePx,
+              el.width * mmToPx,
+              el.height * mmToPx,
+              wrapEnabled,
+              el.fontWeight,
+              el.fontStyle,
+              Boolean(el.autoExpand),
+              Boolean(el.autoShrink)
+            )
             : baseFontSizePx;
 
           return (
             <div
               className="h-full flex items-center select-none px-1"
               style={{
-                fontFamily: el.fontFamily || "Segoe UI",
+                fontFamily: `"${el.fontFamily || "Segoe UI"}", "Noto Sans UI", "Noto Sans", "Segoe UI", sans-serif`,
                 fontSize: `${finalFontSizePx}px`,
                 fontWeight: el.fontWeight || "normal",
                 fontStyle: el.fontStyle || "normal",
                 color: el.textColor || "#000000",
-                lineHeight: 1.25,
+                lineHeight: 1.40,
                 whiteSpace: wrapEnabled ? "pre-wrap" : "nowrap",
                 wordBreak: wrapEnabled ? "break-word" : "normal",
                 width: wrapEnabled ? "100%" : "max-content",
@@ -1964,13 +1978,12 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         <div
           ref={workspaceRef}
           onMouseDown={handleWorkspaceMouseDown}
-          className={`flex-1 overflow-hidden outline-none relative select-none bg-[#313135] ${
-            toolMode === "pan"
+          className={`flex-1 overflow-hidden outline-none relative select-none bg-[#313135] ${toolMode === "pan"
               ? isPanning
                 ? "cursor-grabbing"
                 : "cursor-grab"
               : ""
-          }`}
+            }`}
         >
           {/* Vertical Toolbar on the top right of the canvas grey area */}
           <div className="absolute top-4 right-4 z-30 flex flex-col items-center bg-metro-panel border border-metro-border shadow-2xl rounded-xl p-1.5 gap-1.5 text-xs animate-fade-in">
@@ -1985,11 +1998,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                   setShowAccessionPrompt(true);
                 }
               }}
-              className={`p-2 rounded-lg transition-all cursor-pointer border ${
-                previewMode === "live"
+              className={`p-2 rounded-lg transition-all cursor-pointer border ${previewMode === "live"
                   ? "bg-indigo-500 border-indigo-400 text-white shadow-md"
                   : "border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary"
-              }`}
+                }`}
               title={
                 previewMode === "live"
                   ? "Switch to Design View (Draft Mode)"
@@ -2004,11 +2016,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
             {/* Smart Snapping Guides Toggle */}
             <button
               onClick={() => setActiveGuideLines((prev) => !prev)}
-              className={`p-2 rounded-lg transition-all cursor-pointer border ${
-                activeGuideLines
+              className={`p-2 rounded-lg transition-all cursor-pointer border ${activeGuideLines
                   ? "bg-indigo-500/10 border-indigo-500/30 text-indigo-400"
                   : "border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary"
-              }`}
+                }`}
               title={
                 activeGuideLines
                   ? "Disable Smart Snapping Guides"
@@ -2021,11 +2032,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
             {/* Smart Snapping Alignment Toggle */}
             <button
               onClick={() => onToggleSnapToGrid && onToggleSnapToGrid()}
-              className={`p-2 rounded-lg transition-all cursor-pointer border ${
-                snapToGrid
+              className={`p-2 rounded-lg transition-all cursor-pointer border ${snapToGrid
                   ? "bg-indigo-500 border-indigo-400 text-white shadow-md"
                   : "border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary"
-              }`}
+                }`}
               title={
                 snapToGrid
                   ? "Disable Alignment Hints"
@@ -2057,11 +2067,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                 setToolMode("select");
                 onSelectElement(null);
               }}
-              className={`p-2 rounded-lg transition-all cursor-pointer border ${
-                toolMode === "select"
+              className={`p-2 rounded-lg transition-all cursor-pointer border ${toolMode === "select"
                   ? "bg-metro-accent border-metro-accent/30 text-white shadow-md"
                   : "border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary"
-              }`}
+                }`}
               title="Pointer selection tool (V)"
             >
               <MousePointer className="w-4 h-4" />
@@ -2070,11 +2079,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
             {/* Hand Tool */}
             <button
               onClick={() => setToolMode("pan")}
-              className={`p-2 rounded-lg transition-all cursor-pointer border ${
-                toolMode === "pan"
+              className={`p-2 rounded-lg transition-all cursor-pointer border ${toolMode === "pan"
                   ? "bg-metro-accent border-metro-accent/30 text-white shadow-md"
                   : "border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary"
-              }`}
+                }`}
               title="Hand panning tool (Space)"
             >
               <Hand className="w-4 h-4" />
@@ -2104,20 +2112,19 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                 onUpdateOrientation?.(nextOrientation);
                 onLogMessage?.("info", `Rotated canvas orientation to ${nextOrientation}`);
               }}
-                className="p-2 rounded-lg border border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary transition-all cursor-pointer"
-                title="Rotate Entire Canvas 90° Clockwise"
-              >
-                <RotateCw className="w-4 h-4 text-indigo-400" />
-              </button>
+              className="p-2 rounded-lg border border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary transition-all cursor-pointer"
+              title="Rotate Entire Canvas 90° Clockwise"
+            >
+              <RotateCw className="w-4 h-4 text-indigo-400" />
+            </button>
 
             {/* Separator Guides Toggle */}
             <button
               onClick={() => setShowSepPanel((p) => !p)}
-              className={`p-2 rounded-lg transition-all cursor-pointer border ${
-                showSepPanel
+              className={`p-2 rounded-lg transition-all cursor-pointer border ${showSepPanel
                   ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
                   : "border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary"
-              }`}
+                }`}
               title="Separator Guides — visual only, not printed"
             >
               <Minus className="w-4 h-4" />
@@ -2147,11 +2154,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                   <button
                     key={o}
                     onClick={() => setSepOrientation(o)}
-                    className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold capitalize transition-all cursor-pointer ${
-                      sepOrientation === o
+                    className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold capitalize transition-all cursor-pointer ${sepOrientation === o
                         ? "bg-amber-500/15 border border-amber-500/40 text-amber-300"
                         : "bg-metro-input border border-metro-border text-metro-secondary hover:text-metro-primary"
-                    }`}
+                      }`}
                   >
                     {o}
                   </button>
@@ -2277,15 +2283,14 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                   <div
                     key={el.id}
                     onMouseDown={(e) => handleMouseDown(e, el, "move")}
-                    className={`absolute select-none cursor-move group transition-shadow ${
-                      isHighlighted
+                    className={`absolute select-none cursor-move group transition-shadow ${isHighlighted
                         ? "outline outline-2 outline-amber-400 outline-offset-2 shadow-[0_0_12px_rgba(251,191,36,0.5)] bg-amber-500/10 animate-pulse"
                         : isSelected
                           ? "outline outline-2 outline-indigo-500 outline-offset-0 shadow-lg bg-transparent"
                           : isFieldBound
                             ? "hover:outline hover:outline-1 hover:outline-indigo-400 hover:outline-dashed hover:bg-indigo-500/5"
                             : "hover:outline hover:outline-1 hover:outline-metro-accent/50 hover:outline-dotted"
-                    }`}
+                      }`}
                     style={{
                       left: `${el.x * mmToPx}px`,
                       top: `${el.y * mmToPx}px`,
@@ -2568,17 +2573,17 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                 const style: React.CSSProperties =
                   sg.type === "h"
                     ? {
-                        left: `${sg.x * mmToPx}px`,
-                        top: `${sg.y * mmToPx}px`,
-                        width: `${sg.w * mmToPx}px`,
-                        height: "2px",
-                      }
+                      left: `${sg.x * mmToPx}px`,
+                      top: `${sg.y * mmToPx}px`,
+                      width: `${sg.w * mmToPx}px`,
+                      height: "2px",
+                    }
                     : {
-                        left: `${sg.x * mmToPx}px`,
-                        top: `${sg.y * mmToPx}px`,
-                        width: "2px",
-                        height: `${sg.h * mmToPx}px`,
-                      };
+                      left: `${sg.x * mmToPx}px`,
+                      top: `${sg.y * mmToPx}px`,
+                      width: "2px",
+                      height: `${sg.h * mmToPx}px`,
+                    };
                 return (
                   <div
                     key={`sg-${idx}`}
@@ -2586,9 +2591,8 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                     style={style}
                   >
                     <div
-                      className={`absolute bg-pink-600 px-1.5 py-0.5 rounded text-[8px] font-mono text-white whitespace-nowrap shadow-md ${
-                        sg.type === "h" ? "-translate-y-3.5" : "translate-x-3.5"
-                      }`}
+                      className={`absolute bg-pink-600 px-1.5 py-0.5 rounded text-[8px] font-mono text-white whitespace-nowrap shadow-md ${sg.type === "h" ? "-translate-y-3.5" : "translate-x-3.5"
+                        }`}
                     >
                       {sg.value.toFixed(1)} mm
                     </div>
@@ -2862,7 +2866,7 @@ const BarcodeRenderer: React.FC<BarcodeRendererProps> = ({
       const bar_height_px = showText
         ? Math.max(5, Math.floor((elementHeightMm * scale) - font_size_px - text_margin_px))
         : (elementHeightMm * scale);
-      
+
       let finalBarWidth = barWidth || 0.35;
       if (autoSize) {
         const numModules = estimateBarcodeModules(type, val);
@@ -2872,7 +2876,7 @@ const BarcodeRenderer: React.FC<BarcodeRendererProps> = ({
         // Convert screen pixels back to mm
         finalBarWidth = moduleWidthPx / scale;
       }
-      
+
       const module_width_px = Math.max(1, Math.round(finalBarWidth * scale));
 
       let fontOptions = "";
