@@ -37,7 +37,7 @@ def setup_logger():
   # Console Handler (sys.stdout to prevent stderr misidentification by Electron/process managers)
   console_handler = logging.StreamHandler(sys.stdout)
   console_handler.setFormatter(formatter)
-  console_handler.setLevel(logging.DEBUG)
+  console_handler.setLevel(logging.INFO)
   logger.addHandler(console_handler)
 
   _logger = logger

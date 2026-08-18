@@ -211,8 +211,12 @@ def _render_text_element_to_pil(el: Dict[str, Any], text: str, w_dots: int, h_do
     text_align = str(el.get("textAlign", "left")).lower()
     wrap_text = bool(el.get("wrapText", False))
     auto_shrink = bool(el.get("autoShrink", False))
+<<<<<<< HEAD
     auto_expand = bool(el.get("autoExpand", False))
     is_auto_sizing = auto_shrink or auto_expand
+=======
+    auto_expand = bool(el.get("autoExpand", False) or el.get("auto_expand", False))
+>>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
 
     from backend.services.printer_service import compute_text_layout
 
@@ -235,6 +239,7 @@ def _render_text_element_to_pil(el: Dict[str, Any], text: str, w_dots: int, h_do
     img = Image.new("L", (canvas_w, canvas_h), 255)
     draw = ImageDraw.Draw(img)
 
+<<<<<<< HEAD
     fill_color = 0  # 0 = Pure black text on white background in mode L
 
     layout = compute_text_layout(
@@ -259,10 +264,165 @@ def _render_text_element_to_pil(el: Dict[str, Any], text: str, w_dots: int, h_do
         return len(s) * 8.0
 
     for i, line in enumerate(lines):
+=======
+    def _measure_str(s: str, fnt) -> float:
+        if hasattr(fnt, 'getlength'):
+            return fnt.getlength(s)
+        elif hasattr(fnt, 'getbbox'):
+            bb = fnt.getbbox(s)
+            return bb[2] - bb[0]
+        return len(s) * 8.0
+
+    def wrap_text_pil(txt: str, fnt, max_w: int) -> List[str]:
+        is_cjk_no_spaces = any(
+            (0x4E00 <= ord(c) <= 0x9FFF) or
+            (0x3400 <= ord(c) <= 0x4DBF) or
+            (0x20000 <= ord(c) <= 0x2A6DF) or
+            (0x3040 <= ord(c) <= 0x30FF) or
+            (0xAC00 <= ord(c) <= 0xD7AF)
+            for c in txt
+        )
+
+        wrapped_lines: List[str] = []
+        paragraphs = txt.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+        for para in paragraphs:
+            if not para:
+                wrapped_lines.append("")
+                continue
+
+            if is_cjk_no_spaces:
+                curr_line = ""
+                for char in para:
+                    if _measure_str(curr_line + char, fnt) <= max_w:
+                        curr_line += char
+                    else:
+                        if curr_line:
+                            wrapped_lines.append(curr_line)
+                        curr_line = char
+                if curr_line:
+                    wrapped_lines.append(curr_line)
+            else:
+                words = para.split(" ")
+                curr_line_words: List[str] = []
+                for word in words:
+                    test_line = " ".join(curr_line_words + [word]) if curr_line_words else word
+                    if _measure_str(test_line, fnt) <= max_w:
+                        curr_line_words.append(word)
+                    else:
+                        if curr_line_words:
+                            wrapped_lines.append(" ".join(curr_line_words))
+                            curr_line_words = []
+
+                        if _measure_str(word, fnt) > max_w:
+                            part = ""
+                            for char in word:
+                                if _measure_str(part + char, fnt) <= max_w:
+                                    part += char
+                                else:
+                                    if part:
+                                        wrapped_lines.append(part)
+                                    part = char
+                            if part:
+                                curr_line_words = [part]
+                        else:
+                            curr_line_words = [word]
+                if curr_line_words:
+                    wrapped_lines.append(" ".join(curr_line_words))
+
+        return wrapped_lines if wrapped_lines else [txt]
+
+    fill_color = 0  # 0 = Pure black text on white background in mode L
+
+    is_indic_text = has_devnagari
+    line_spacing_ratio = 0.35 if is_indic_text else 0.20
+
+    def _get_line_h(f, fs):
+        if hasattr(f, 'getmetrics'):
+            asc, dsc = f.getmetrics()
+            h = asc + dsc
+            return max(h, int(round(fs * 1.35))) if is_indic_text else max(h, fs)
+        elif hasattr(f, 'getbbox'):
+            test_s = "अिैौ्ग्यीÅgjyq|" if is_indic_text else "Ågjyq|"
+            b = f.getbbox(test_s)
+            return max(fs, b[3] - b[1])
+        return fs
+
+    max_w_bound = max(1, w_px - 4)
+
+    # 1. Determine font_size_px based on flags (auto_expand, smart_fit, auto_shrink)
+    if auto_expand:
+        max_boost_px = int(round(3.0 * (dpi / 72.0)))
+        start_size_px = font_size_px + max_boost_px
+        min_size_floor_px = int(round(4.0 * (dpi / 72.0))) if auto_shrink else font_size_px
+
+        cand_sz = start_size_px
+        while cand_sz >= min_size_floor_px:
+            cand_fnt = _get_font_for_text(font_family, bold, italic, text, cand_sz)
+            cand_lines = wrap_text_pil(text, cand_fnt, max_w_bound) if wrap_text else [text]
+            lh_px = _get_line_h(cand_fnt, cand_sz)
+            tot_h_px = len(cand_lines) * (lh_px * (1.0 + line_spacing_ratio)) - (lh_px * line_spacing_ratio)
+            max_w_px = max(_measure_str(l, cand_fnt) for l in cand_lines) if cand_lines else 0
+
+            if max_w_px <= max_w_bound and tot_h_px <= h_px:
+                font_size_px = cand_sz
+                break
+            cand_sz -= 1
+        else:
+            font_size_px = min_size_floor_px
+
+    elif el.get("smartFit"):
+        base_font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
+        base_lines = wrap_text_pil(text, base_font, max_w_bound) if wrap_text else [text]
+        base_line_count = len(base_lines)
+        base_lh_px = _get_line_h(base_font, font_size_px)
+        base_tot_h_px = base_line_count * (base_lh_px * (1.0 + line_spacing_ratio)) - (base_lh_px * line_spacing_ratio)
+        base_max_w_px = max(_measure_str(l, base_font) for l in base_lines) if base_lines else 0
+
+        if base_tot_h_px <= h_px and base_max_w_px <= max_w_bound:
+            boost_px = max(2, int(round(4.0 * (dpi / 72.0))))
+            for frac in [1.0, 0.75, 0.5, 0.25]:
+                cand_size = font_size_px + max(1, int(round(boost_px * frac)))
+                cand_font = _get_font_for_text(font_family, bold, italic, text, cand_size)
+                cand_lines = wrap_text_pil(text, cand_font, max_w_bound) if wrap_text else [text]
+                if wrap_text and len(cand_lines) > base_line_count:
+                    continue
+                cand_lh_px = _get_line_h(cand_font, cand_size)
+                cand_tot_h_px = len(cand_lines) * (cand_lh_px * (1.0 + line_spacing_ratio)) - (cand_lh_px * line_spacing_ratio)
+                cand_max_w_px = max(_measure_str(l, cand_font) for l in cand_lines) if cand_lines else 0
+                if cand_tot_h_px <= h_px and cand_max_w_px <= max_w_bound:
+                    font_size_px = cand_size
+                    break
+
+    elif auto_shrink:
+        min_size_px = int(round(4.0 * (dpi / 72.0)))
+        while font_size_px > min_size_px:
+            font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
+            lines = wrap_text_pil(text, font, max_w_bound) if wrap_text else [text]
+            lh_px = _get_line_h(font, font_size_px)
+            tot_h_px = len(lines) * (lh_px * (1.0 + line_spacing_ratio)) - (lh_px * line_spacing_ratio)
+            max_w_px = max(_measure_str(l, font) for l in lines) if lines else 0
+
+            if tot_h_px <= h_px and max_w_px <= max_w_bound:
+                break
+            font_size_px -= 1
+
+    # 2. Render text at final computed font_size_px
+    font = _get_font_for_text(font_family, bold, italic, text, font_size_px)
+    lines_to_draw = wrap_text_pil(text, font, max_w_bound) if wrap_text else [text]
+    line_h_px = _get_line_h(font, font_size_px)
+    line_spacing_px = int(line_h_px * line_spacing_ratio)
+    line_height_total = line_h_px + line_spacing_px
+    total_text_h = len(lines_to_draw) * line_height_total - line_spacing_px
+    start_y = top_padding + max(0, (h_px - total_text_h) // 2)
+
+    for i, line in enumerate(lines_to_draw):
+>>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
         line_w = _measure_str(line, font)
         if text_align == "center":
             cx = side_padding + w_px / 2.0
         elif text_align == "right":
+<<<<<<< HEAD
             cx = side_padding + max(0.0, w_px - line_w / 2.0)
         else:
             cx = side_padding + line_w / 2.0
@@ -273,6 +433,16 @@ def _render_text_element_to_pil(el: Dict[str, Any], text: str, w_dots: int, h_do
             draw.text((cx_px, cy_px), line, font=font, fill=fill_color, anchor="mm")
             if bold:
                 draw.text((cx_px + 1, cy_px), line, font=font, fill=fill_color, anchor="mm")
+=======
+            cx = side_padding + max(0, int(w_px - line_w / 2.0))
+        else:
+            cx = side_padding + int(line_w / 2.0)
+        cy = start_y + i * line_height_total + line_h_px // 2
+        if cy <= canvas_h:
+            draw.text((cx, cy), line, font=font, fill=fill_color, anchor="mm")
+            if bold:
+                draw.text((cx + 1, cy), line, font=font, fill=fill_color, anchor="mm")
+>>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
 
     # Hard binary thresholding at 128 (values < 128 -> pure black 0, >= 128 -> pure white 255)
     return img.point(lambda p: 0 if p < 128 else 255, mode="1")

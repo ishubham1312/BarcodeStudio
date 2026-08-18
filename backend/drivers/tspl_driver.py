@@ -243,8 +243,8 @@ def build_tspl_label_header(template: Dict[str, Any], dpi: int, hw_offset_x_dots
         f"GAP {gap_mm:.1f} mm,0 mm",
         direction_cmd,
         reference_line,
-        "SPEED 4",
-        "DENSITY 10",
+        "SPEED 3",
+        "DENSITY 8",
         "SET CUTTER OFF",
         "SET TEAR ON",
     ]
@@ -328,6 +328,7 @@ def translate_element_to_tspl(
         except UnicodeEncodeError:
             has_non_ascii = True
             
+<<<<<<< HEAD
         wrap_text = el.get("wrapText", False)
         auto_shrink = bool(el.get("autoShrink", False))
         auto_expand = bool(el.get("autoExpand", False))
@@ -341,6 +342,15 @@ def translate_element_to_tspl(
         is_full_pil = wrap_text or auto_shrink or auto_expand or (has_non_ascii and rotation_deg != 0) or is_custom_font or bold or italic
 
         if is_full_pil:
+=======
+        auto_expand = bool(el.get("autoExpand", False) or el.get("auto_expand", False))
+        smart_fit = bool(el.get("smartFit", False) or el.get("smart_fit", False))
+        auto_shrink = bool(el.get("autoShrink", False) or el.get("auto_shrink", False))
+        wrap_text_option = bool(el.get("wrapText", False))
+            
+        use_bitmap = wrap_text_option or has_non_ascii or auto_expand or smart_fit or auto_shrink
+        if use_bitmap:
+>>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
             try:
                 from PIL import Image, ImageDraw, ImageFont
                 from backend.services.printer_service import compute_text_layout
@@ -353,7 +363,181 @@ def translate_element_to_tspl(
                 img = Image.new("1", (unrot_w, unrot_h), 1)
                 draw = ImageDraw.Draw(img)
 
+<<<<<<< HEAD
                 font_size_pt = float(el.get("fontSize", 10))
+=======
+                bold = el.get("fontWeight") == "bold"
+                italic = el.get("fontStyle") == "italic"
+                
+                font_family = el.get("fontFamily", "Segoe UI")
+                # Language-smart font family override
+                if value:
+                    has_indic = False
+                    has_cjk = False
+                    has_arabic = False
+                    
+                    for char in str(value):
+                        cp = ord(char)
+                        if 0x0900 <= cp <= 0x0D7F:
+                            has_indic = True
+                        elif (0x4E00 <= cp <= 0x9FFF) or (0x3040 <= cp <= 0x30FF) or (0xAC00 <= cp <= 0xD7AF):
+                            has_cjk = True
+                        elif 0x0600 <= cp <= 0x06FF:
+                            has_arabic = True
+                            
+                    if has_indic:
+                        supported_indic = {'nirmala ui', 'nirmala', 'nirmala-bold', 'mangal', 'arial', 'kokila', 'utsaah', 'sanskrit text', 'aparajita', 'arial unicode ms'}
+                        if font_family.lower() not in supported_indic:
+                            font_family = "Nirmala"
+                    elif has_cjk:
+                        supported_cjk = {'malgun gothic', 'microsoft jhenghei', 'microsoft yahei', 'ms gothic', 'simsun', 'msgothic', 'arial unicode ms'}
+                        if font_family.lower() not in supported_cjk:
+                            font_family = "Malgun Gothic"
+                    elif has_arabic:
+                        supported_arabic = {'arial', 'segoe ui', 'times new roman', 'tahoma', 'microsoft uighur'}
+                        if font_family.lower() not in supported_arabic:
+                            font_family = "Arial"
+
+                script_kind = _detect_script_kind(value if value else "")
+                font_candidates = _font_candidates_for_script(
+                    script_kind, bold, italic, get_font_path(font_family, bold, italic)
+                )
+                auto_expand = el.get("autoExpand", False) or el.get("auto_expand", False)
+                smart_fit = el.get("smartFit", False) or el.get("smart_fit", False)
+                auto_shrink = el.get("autoShrink", False) or el.get("auto_shrink", False)
+                wrap_text = bool(el.get("wrapText", False))
+
+                is_indic_text = script_kind == "indic" or any(0x0900 <= ord(c) <= 0x0D7F for c in (value or ""))
+                line_spacing_ratio = 0.35 if is_indic_text else 0.20
+
+                def _get_line_h(f, fs):
+                    if hasattr(f, 'getmetrics'):
+                        asc, dsc = f.getmetrics()
+                        h = asc + dsc
+                        return max(h, int(round(fs * 1.35))) if is_indic_text else max(h, fs)
+                    elif hasattr(f, 'getbbox'):
+                        test_s = "अिैौ्ग्यीÅgjyq|" if is_indic_text else "Ågjyq|"
+                        b = f.getbbox(test_s)
+                        return max(fs, b[3] - b[1])
+                    return fs
+
+                max_w_bound = max(1, unrot_w - 4)
+
+                def wrap_text_pil(txt: str, fnt: Any, max_w: int) -> list:
+                    def _measure(s):
+                        if hasattr(fnt, 'getlength'):
+                            return fnt.getlength(s)
+                        elif hasattr(fnt, 'getbbox'):
+                            b = fnt.getbbox(s)
+                            return b[2] - b[0]
+                        return len(s) * 8.0
+
+                    has_indic_or_cjk = any(
+                        (0x0900 <= ord(c) <= 0x0D7F) or
+                        (0x4E00 <= ord(c) <= 0x9FFF) or
+                        (0x3040 <= ord(c) <= 0x30FF) or
+                        (0xAC00 <= ord(c) <= 0xD7AF) or
+                        (0x0600 <= ord(c) <= 0x06FF)
+                        for c in txt
+                    )
+
+                    wrapped_lines = []
+                    if has_indic_or_cjk:
+                        curr_line = ""
+                        for char in txt:
+                            test = curr_line + char
+                            if _measure(test) <= max_w:
+                                curr_line = test
+                            else:
+                                if curr_line:
+                                    wrapped_lines.append(curr_line)
+                                curr_line = char
+                        if curr_line:
+                            wrapped_lines.append(curr_line)
+                    else:
+                        words = txt.split(" ")
+                        curr_line = []
+                        for word in words:
+                            test_line = " ".join(curr_line + [word])
+                            if _measure(test_line) <= max_w:
+                                curr_line.append(word)
+                            else:
+                                if curr_line:
+                                    wrapped_lines.append(" ".join(curr_line))
+                                    curr_line = [word]
+                                else:
+                                    wrapped_lines.append(word)
+                                    curr_line = []
+                        if curr_line:
+                            wrapped_lines.append(" ".join(curr_line))
+                    return wrapped_lines
+
+                # Determine font_size_px based on flags (auto_expand, smart_fit, auto_shrink)
+                if auto_expand:
+                    max_boost_px = int(round(3.0 * (dpi / 72.0)))
+                    start_size_px = font_size_px + max_boost_px
+                    min_size_floor_px = int(round(4.0 * (dpi / 72.0))) if auto_shrink else font_size_px
+
+                    cand_sz = start_size_px
+                    while cand_sz >= min_size_floor_px:
+                        cand_fnt = _load_text_font(font_candidates, cand_sz, script_kind != "latin", value)
+                        cand_lines = wrap_text_pil(value, cand_fnt, max_w_bound) if wrap_text else [value]
+                        lh_px = _get_line_h(cand_fnt, cand_sz)
+                        tot_h_px = len(cand_lines) * (lh_px * (1.0 + line_spacing_ratio)) - (lh_px * line_spacing_ratio)
+                        max_w_px = max(cand_fnt.getlength(l) if hasattr(cand_fnt, 'getlength') else (cand_fnt.getbbox(l)[2] - cand_fnt.getbbox(l)[0] if hasattr(cand_fnt, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
+
+                        if max_w_px <= max_w_bound and tot_h_px <= unrot_h:
+                            font_size_px = cand_sz
+                            break
+                        cand_sz -= 1
+                    else:
+                        font_size_px = min_size_floor_px
+
+                elif smart_fit:
+                    base_font = _load_text_font(font_candidates, font_size_px, script_kind != "latin", value)
+                    base_lines = wrap_text_pil(value, base_font, max_w_bound) if wrap_text else [value]
+                    base_line_count = len(base_lines)
+                    base_lh_px = _get_line_h(base_font, font_size_px)
+                    base_tot_h_px = base_line_count * (base_lh_px * (1.0 + line_spacing_ratio)) - (base_lh_px * line_spacing_ratio)
+                    base_max_w_px = max(base_font.getlength(l) if hasattr(base_font, 'getlength') else (base_font.getbbox(l)[2] - base_font.getbbox(l)[0] if hasattr(base_font, 'getbbox') else len(l) * 8) for l in base_lines) if base_lines else 0
+
+                    if base_tot_h_px <= unrot_h and base_max_w_px <= max_w_bound:
+                        boost_px = max(2, int(round(4.0 * (dpi / 72.0))))
+                        for frac in [1.0, 0.75, 0.5, 0.25]:
+                            cand_size = font_size_px + max(1, int(round(boost_px * frac)))
+                            cand_font = _load_text_font(font_candidates, cand_size, script_kind != "latin", value)
+                            cand_lines = wrap_text_pil(value, cand_font, max_w_bound) if wrap_text else [value]
+                            if wrap_text and len(cand_lines) > base_line_count:
+                                continue
+                            cand_lh_px = _get_line_h(cand_font, cand_size)
+                            cand_tot_h_px = len(cand_lines) * (cand_lh_px * (1.0 + line_spacing_ratio)) - (cand_lh_px * line_spacing_ratio)
+                            cand_max_w_px = max(cand_font.getlength(l) if hasattr(cand_font, 'getlength') else (cand_font.getbbox(l)[2] - cand_font.getbbox(l)[0] if hasattr(cand_font, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
+                            if cand_tot_h_px <= unrot_h and cand_max_w_px <= max_w_bound:
+                                font_size_px = cand_size
+                                break
+
+                elif auto_shrink:
+                    min_size_px = int(round(4.0 * (dpi / 72.0)))
+                    while font_size_px > min_size_px:
+                        font = _load_text_font(font_candidates, font_size_px, script_kind != "latin", value)
+                        lines = wrap_text_pil(value, font, max_w_bound) if wrap_text else [value]
+                        lh_px = _get_line_h(font, font_size_px)
+                        tot_h_px = len(lines) * (lh_px * (1.0 + line_spacing_ratio)) - (lh_px * line_spacing_ratio)
+                        max_w_px = max(font.getlength(l) if hasattr(font, 'getlength') else (font.getbbox(l)[2] - font.getbbox(l)[0] if hasattr(font, 'getbbox') else len(l) * 8) for l in lines) if lines else 0
+
+                        if tot_h_px <= unrot_h and max_w_px <= max_w_bound:
+                            break
+                        font_size_px -= 1
+
+                font = _load_text_font(font_candidates, font_size_px, script_kind != "latin", value)
+                lines_to_draw = wrap_text_pil(value, font, max_w_bound) if wrap_text else [value]
+                line_h = _get_line_h(font, font_size_px)
+                line_spacing = int(line_h * line_spacing_ratio)
+                line_height_total = line_h + line_spacing
+                total_text_h = len(lines_to_draw) * line_height_total - line_spacing
+                start_y = max(0, (unrot_h - total_text_h) // 2)
+
+>>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                 text_align = el.get("textAlign", "left")
 
                 layout = compute_text_layout(
@@ -382,12 +566,19 @@ def translate_element_to_tspl(
                     if hasattr(font, 'getlength'):
                         return font.getlength(s)
                     elif hasattr(font, 'getbbox'):
+<<<<<<< HEAD
                         bb = font.getbbox(s)
                         return bb[2] - bb[0]
                     return len(s) * 8.0
 
                 for idx_line, line in enumerate(lines_to_draw):
                     line_w = _measure_line(line)
+=======
+                        b = font.getbbox(line)
+                        line_w = b[2] - b[0]
+                    else:
+                        line_w = len(line) * 8.0
+>>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
 
                     if text_align == "center":
                         draw_x = max(0, int((unrot_w - line_w) // 2))
@@ -397,7 +588,11 @@ def translate_element_to_tspl(
                         draw_x = 0
 
                     draw_y = start_y + idx_line * line_height_total
+<<<<<<< HEAD
                     if draw_y < unrot_h:
+=======
+                    if draw_y + line_h <= unrot_h + 10:
+>>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                         draw.text((draw_x, draw_y), line, font=font, fill=0) # 0 is black text
 
                 if rotation_deg != 0:
@@ -415,6 +610,7 @@ def translate_element_to_tspl(
                 lines.append(bitmap_cmd + raw_bytes + b"\r\n")
             except Exception as tex:
                 logger.warning(f"[TSPL] Wrapped text BITMAP conversion failed: {tex}")
+<<<<<<< HEAD
                 is_mixed_nowrap = True # fallback if full PIL failed
 
         if is_mixed_nowrap:
@@ -511,6 +707,11 @@ def translate_element_to_tspl(
                 logger.error(f"[TSPL] Mixed text inline parsing failed: {e}")
 
         if not is_full_pil and not is_mixed_nowrap:
+=======
+                use_bitmap = False
+
+        if not use_bitmap:
+>>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
             # ASCII-only TEXT command — only used for pure ASCII text
             font_size_pt = float(el.get("fontSize", 10))
             font_h_d = max(8, int(font_size_pt * dpi / 72.0))

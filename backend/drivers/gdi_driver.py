@@ -425,10 +425,10 @@ class GDIDriver(PrinterDriverInterface):
                             # rotate angle is negative to rotate clockwise in PIL
                             img = img.rotate(-calib_rot, expand=True, resample=Image.Resampling.BICUBIC)
 
-                        # Convert monochrome thermal print jobs to a clean 1-bit bitmap using a hard threshold
+                        # Convert monochrome thermal print jobs to a crisp 1-bit bitmap using balanced threshold
                         if force_mono:
                             img_gray = img.convert("L")
-                            img_mono = img_gray.point(lambda p: 255 if p > 180 else 0)
+                            img_mono = img_gray.point(lambda p: 255 if p > 128 else 0)
                             img = img_mono.convert("RGB")
                         elif img.mode != "RGB":
                             img = img.convert("RGB")
@@ -463,17 +463,18 @@ class GDIDriver(PrinterDriverInterface):
                                 status = gdiplus.GdipCreateFromHDC(hdc_handle, ctypes.byref(graphics))
                                 if status == 0:
                                     try:
-                                        # Use high-quality rendering
-                                        gdiplus.GdipSetTextRenderingHint(graphics, 5) # TextRenderingHint.ClearTypeGridFit
-                                        gdiplus.GdipSetSmoothingMode(graphics, 2)     # SmoothingMode.HighQuality
-                                        gdiplus.GdipSetPixelOffsetMode(graphics, 2)    # PixelOffsetMode.HighQuality
-                                        
-                                        # Use InterpolationMode.HighQualityBicubic so high-DPI
-                                        # text (Hindi/Tamil/etc.) is downsampled cleanly to the
-                                        # printer's native DPI instead of being aliased into dashes.
-                                        # Barcode modules are large enough that bicubic still
-                                        # preserves crisp edges.
-                                        gdiplus.GdipSetInterpolationMode(graphics, 3) # InterpolationMode.HighQualityBicubic
+                                        # Use high-precision rendering tuned for label/thermal output
+                                        is_thermal_printer = force_mono or (dc_dpi <= 300 and any(k.upper() in (printer_name or "").upper() for k in ("TSPL", "TSC", "ZEBRA", "GODEX", "XPRINTER", "HONEYWELL", "CITIZEN", "ARGOX", "ENDURA", "2801", "KORES", "TE200", "TE244", "TE300")))
+                                        if is_thermal_printer:
+                                            gdiplus.GdipSetTextRenderingHint(graphics, 4) # TextRenderingHint.AntiAliasGridFit
+                                            gdiplus.GdipSetSmoothingMode(graphics, 2)     # SmoothingMode.HighQuality
+                                            gdiplus.GdipSetPixelOffsetMode(graphics, 2)    # PixelOffsetMode.HighQuality
+                                            gdiplus.GdipSetInterpolationMode(graphics, 6) # InterpolationMode.HighQualityBilinear (prevents fuzzy gray edges)
+                                        else:
+                                            gdiplus.GdipSetTextRenderingHint(graphics, 5) # TextRenderingHint.ClearTypeGridFit
+                                            gdiplus.GdipSetSmoothingMode(graphics, 2)     # SmoothingMode.HighQuality
+                                            gdiplus.GdipSetPixelOffsetMode(graphics, 2)    # PixelOffsetMode.HighQuality
+                                            gdiplus.GdipSetInterpolationMode(graphics, 3) # InterpolationMode.HighQualityBicubic
 
                                         # Convert RGB to RGBA before exporting raw BGRA bytes for GDI+
                                         if img.mode != "RGBA":
