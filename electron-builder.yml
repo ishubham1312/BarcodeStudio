@@ -7,8 +7,8 @@ files:
   - dist-electron/**/*
   - package.json
 extraResources:
-  - from: backend/dist/services.exe
-    to: backend/services.exe
+  - from: backend/dist/studio_backend.exe
+    to: backend/studio_backend.exe
   - from: backend
     to: backend
     filter:
@@ -18,11 +18,13 @@ extraResources:
       - "!__pycache__/**/*"
       - "!*.spec"
       - "!services.exe"
+      - "!studio_backend.exe"
 win:
   target: nsis
   icon: assets/logo.ico
   executableName: Barcode Studio
 nsis:
+  include: build/installer.nsh
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true

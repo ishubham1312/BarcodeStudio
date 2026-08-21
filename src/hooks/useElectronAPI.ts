@@ -181,7 +181,7 @@ export function useElectronAPI(): ElectronAPI {
       onOpenFile: () => { },
       onOpenConfigFile: () => { },
       getInitialFile: async () => null,
-      getSystemFonts: async () => ({ success: true, fonts: ["Arial", "Segoe UI", "Noto Sans UI", "Malgun Gothic", "MS Gothic", "Microsoft YaHei", "Arial Unicode MS"] }),
+      getSystemFonts: async () => ({ success: true, fonts: ["Noto Sans", "Noto Sans Devanagari", "Segoe UI", "Inter", "Arial", "Noto Sans UI", "Nirmala UI", "Malgun Gothic", "MS Gothic", "Microsoft YaHei", "Arial Unicode MS"] }),
       checkUpdates: async () => {
         try {
           const response = await fetch("https://api.github.com/repos/ishubham1312/BarCode-Studio/releases/latest");
@@ -223,6 +223,12 @@ export function useElectronAPI(): ElectronAPI {
         }
         window.open(url, "_blank", "noopener,noreferrer");
         return { success: true };
+      },
+      restartApp: async () => {
+        if (window.electronAPI && typeof window.electronAPI.restartApp === "function") {
+          return await window.electronAPI.restartApp();
+        }
+        window.location.reload();
       },
     };
   }, []);

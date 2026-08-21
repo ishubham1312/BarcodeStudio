@@ -70,6 +70,7 @@ export interface ElectronAPI {
   checkUpdates: () => Promise<{ success: boolean; release?: any; noReleases?: boolean; message?: string }>;
   downloadAndInstallUpdate: (downloadUrl: string) => Promise<{ success: boolean; message?: string }>;
   openExternal: (url: string) => Promise<{ success: boolean; message?: string }>;
+  restartApp: () => Promise<void>;
 }
 
 declare global {

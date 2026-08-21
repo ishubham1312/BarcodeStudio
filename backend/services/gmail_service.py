@@ -9,10 +9,10 @@ import threading
 import os
 import sqlite3
 from typing import List, Dict, Any, Optional
-from backend.services.db_service import get_record_by_unique_field
-from backend.services.printer_service import print_batch_to_spooler
-from backend.services.logging_service import get_logger
-from backend.utils.helpers import get_user_data_dir
+from services.db_service import get_record_by_unique_field
+from services.printer_service import print_batch_to_spooler
+from services.logging_service import get_logger
+from utils.helpers import get_user_data_dir
 
 logger = get_logger()
 
@@ -22,7 +22,7 @@ logger = get_logger()
 
 def resolve_sqlite_path(path_str: Optional[str]) -> str:
     """Resolve relative SQLite paths against user writable directory."""
-    from backend.utils.helpers import get_user_data_dir
+    from utils.helpers import get_user_data_dir
     if not path_str:
         return str(get_user_data_dir() / 'barcode_studio_library.db')
     if not os.path.isabs(path_str):

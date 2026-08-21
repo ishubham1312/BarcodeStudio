@@ -1,6 +1,87 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'Noto Sans';
+  src: url('/fonts/Noto Sans.ttf') format('truetype'),
+       url('../assets/fonts/Noto Sans.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Sans Devanagari';
+  src: url('/fonts/Noto Sans.ttf') format('truetype'),
+       url('../assets/fonts/Noto Sans.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Nirmala UI';
+  src: url('/fonts/nirmala.ttf') format('truetype'),
+       url('../assets/fonts/nirmala.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Nirmala UI';
+  src: url('/fonts/nirmala-bold.ttf') format('truetype'),
+       url('../assets/fonts/nirmala-bold.ttf') format('truetype');
+  font-weight: bold;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Segoe UI';
+  src: url('/fonts/segoeui.ttf') format('truetype'),
+       url('../assets/fonts/segoeui.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Segoe UI';
+  src: url('/fonts/segoeuib.ttf') format('truetype'),
+       url('../assets/fonts/segoeuib.ttf') format('truetype');
+  font-weight: bold;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Arial';
+  src: url('/fonts/arial.ttf') format('truetype'),
+       url('../assets/fonts/arial.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Arial';
+  src: url('/fonts/arialbd.ttf') format('truetype'),
+       url('../assets/fonts/arialbd.ttf') format('truetype');
+  font-weight: bold;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Arial Unicode MS';
+  src: url('/fonts/arialuni.ttf') format('truetype'),
+       url('../assets/fonts/arialuni.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* Default: Modern Cozy Dark Theme (Elegant Slate & Indigo/Violet Glow) */
   --bg-app: #090b11;

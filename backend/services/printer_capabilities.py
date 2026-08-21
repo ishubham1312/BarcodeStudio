@@ -18,7 +18,7 @@ sensible mock so the rest of the pipeline keeps working.
 import sys
 from typing import Any, Dict, List, Optional
 
-from backend.services.logging_service import get_logger
+from services.logging_service import get_logger
 
 logger = get_logger()
 

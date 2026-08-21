@@ -2,8 +2,8 @@ import json
 import os
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-from backend.utils.helpers import get_user_data_dir, safe_filename
-from backend.services.logging_service import get_logger
+from utils.helpers import get_user_data_dir, safe_filename
+from services.logging_service import get_logger
 
 logger = get_logger()
 

@@ -3,7 +3,7 @@ import os
 import pymysql
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from backend.services.logging_service import get_logger
+from services.logging_service import get_logger
 
 logger = get_logger()
 
@@ -16,7 +16,7 @@ except ImportError:
 
 def resolve_sqlite_path(sqlite_path: str) -> str:
   """Resolve relative SQLite paths against user writable directory."""
-  from backend.utils.helpers import get_user_data_dir
+  from utils.helpers import get_user_data_dir
   if sqlite_path:
     import os
     if not os.path.isabs(sqlite_path):
@@ -556,23 +556,13 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
     else:
       clean_table = f"[{table_name}]"
 
-<<<<<<< HEAD
-    # Step 1: Discover actual columns quickly via cursor description or schema
-    actual_columns: List[str] = []
-    try:
-      cursor.execute(f"SELECT TOP 1 * FROM {clean_table}")
-      if cursor.description:
-        actual_columns = [col[0] for col in cursor.description]
-    except Exception as desc_err:
-      logger.warning(f"[db_service] Could not query table '{clean_table}' directly: {desc_err}")
-=======
-    # ----------------------------------------------------------------
+    val_clean = str(value).strip()
+
     # Fast Path: Execute direct indexed query first for instant response
-    # ----------------------------------------------------------------
     if unique_field:
       safe_field = unique_field.replace("[", "").replace("]", "")
       try:
-        cursor.execute(f"SELECT TOP 1 * FROM {clean_table} WHERE [{safe_field}] = ?", (value,))
+        cursor.execute(f"SELECT TOP 1 * FROM {clean_table} WHERE [{safe_field}] = ?", (val_clean,))
         row = cursor.fetchone()
         if row:
           columns = [col[0] for col in cursor.description]
@@ -582,15 +572,14 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
       except Exception:
         pass
 
-    # ----------------------------------------------------------------
-    # Step 1: Discover all actual columns in this table (fallback).
-    # ----------------------------------------------------------------
+    # Step 1: Discover actual columns
+    actual_columns: List[str] = []
     try:
-      raw_table = table_name
-      if "." in table_name:
-        parts = table_name.replace("[", "").replace("]", "").split(".")
-        raw_table = parts[-1]
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
+      cursor.execute(f"SELECT TOP 1 * FROM {clean_table}")
+      if cursor.description:
+        actual_columns = [col[0] for col in cursor.description]
+    except Exception as desc_err:
+      logger.warning(f"[db_service] Could not query table '{clean_table}' directly: {desc_err}")
 
     if not actual_columns:
       try:
@@ -606,44 +595,22 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
 
     # Step 2: Build prioritized list of fields to test
     fields_to_try: List[str] = []
+    ACCESSION_HINTS = [
+      "acc_no", "accno", "accession", "accessionno", "accession_no",
+      "accession_number", "accessionnumber", "acc", "barcode",
+      "book_no", "bookno", "item_id", "itemid", "id", "code",
+      "serial", "serial_no", "serialno"
+    ]
 
-<<<<<<< HEAD
     # 1. Exact match for requested unique_field
     if unique_field:
       for col in actual_columns:
         if col.lower() == unique_field.lower():
           if col not in fields_to_try:
             fields_to_try.append(col)
-=======
-    if unique_field and actual_columns:
-      if unique_field in actual_columns:
-        resolved_field = unique_field
-      else:
-        uf_lower = unique_field.lower()
-        for col in actual_columns:
-          if col.lower() == uf_lower:
-            resolved_field = col
-            break
-
-    if not resolved_field and actual_columns:
-      ACCESSION_HINTS = [
-        "acc_no", "accno", "accession", "accessionno", "accession_no",
-        "accession_number", "accessionnumber", "acc", "barcode",
-        "book_no", "bookno", "item_id", "itemid", "id", "code",
-        "serial", "serial_no", "serialno"
-      ]
-      for hint in ACCESSION_HINTS:
-        for col in actual_columns:
-          if col.lower() == hint or col.lower().startswith(hint):
-            resolved_field = col
-            break
-        if resolved_field:
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
-          break
       if unique_field not in fields_to_try:
         fields_to_try.append(unique_field)
 
-<<<<<<< HEAD
     # 2. Add common accession-like candidate columns present in the table
     for col in actual_columns:
       c_lower = col.lower()
@@ -661,22 +628,6 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
     for fld in fields_to_try:
       try:
         # 1. Exact equality match
-=======
-    if not resolved_field:
-      resolved_field = unique_field or (actual_columns[0] if actual_columns else "id")
-
-    # ----------------------------------------------------------------
-    # Step 3: Execute query with resolved column name.
-    # ----------------------------------------------------------------
-    try:
-      cursor.execute(
-        f"SELECT TOP 1 * FROM {clean_table} WHERE [{resolved_field}] = ?",
-        (value,)
-      )
-      row = cursor.fetchone()
-
-      if not row:
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
         cursor.execute(
           f"SELECT TOP 1 * FROM {clean_table} WHERE [{fld}] = ?",
           (val_clean,)
@@ -727,24 +678,6 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
     except Exception:
       pass
 
-<<<<<<< HEAD
     return res
-=======
-    except Exception as query_err:
-      logger.error(
-        f"[db_service] MSSQL query failed for table='{clean_table}' "
-        f"field='{resolved_field}' value='{value}': {query_err}"
-      )
-      try:
-        conn.close()
-      except Exception:
-        pass
-      return None
-      try:
-        conn.close()
-      except Exception:
-        pass
-      raise
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
 
   return None

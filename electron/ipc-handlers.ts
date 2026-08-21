@@ -5,7 +5,7 @@ import * as fssync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execFile, exec } from 'child_process';
-import { getPythonPort } from './python-bridge';
+import { getPythonPort, stopPythonBackend } from './python-bridge';
 import { encrypt, decrypt } from './security';
 
 const httpAgent = new http.Agent({
@@ -197,8 +197,34 @@ export function registerIpcHandlers(mainWindow: BrowserWindow) {
   });
 
   ipcMain.handle('get-system-fonts', async () => {
-    try { return await httpRequest('GET', getBackendUrl('/api/fonts')); }
-    catch (err: any) { return { success: false, message: err.message }; }
+    try {
+      const res = await httpRequest('GET', getBackendUrl('/api/fonts'), undefined, 3000);
+      if (res && res.success && Array.isArray(res.fonts) && res.fonts.length > 0) {
+        return res;
+      }
+    } catch (_) {}
+    return {
+      success: true,
+      fonts: [
+        'Noto Sans',
+        'Noto Sans Devanagari',
+        'Segoe UI',
+        'Inter',
+        'Arial',
+        'Courier New',
+        'Times New Roman',
+        'Georgia',
+        'Impact',
+        'Verdana',
+        'JetBrains Mono',
+        'Trebuchet MS',
+        'Nirmala UI',
+        'Malgun Gothic',
+        'MS Gothic',
+        'Microsoft YaHei',
+        'Arial Unicode MS',
+      ],
+    };
   });
 
   // Settings operations (stored locally via Python or local Electron storage)
@@ -379,6 +405,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow) {
       }
       return { success: false, message: err.message };
     }
+  });
+
+  ipcMain.handle('restart-app', () => {
+    try {
+      stopPythonBackend();
+    } catch (_) {}
+    app.relaunch();
+    app.exit(0);
   });
 }
 

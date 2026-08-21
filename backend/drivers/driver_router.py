@@ -3,13 +3,13 @@ import importlib
 from typing import Any, Dict, Type
 
 try:
-    from backend.drivers.base_driver import PrinterDriverInterface
-    from backend.drivers.gdi_driver   import GDIDriver
-    from backend.drivers.tspl_driver  import TSPLDriver
-    from backend.drivers.zpl_driver   import ZPLDriver
-    from backend.drivers.epl_driver   import EPLDriver
-    from backend.drivers.pdf_driver   import PDFDriver
-    from backend.services.logging_service import get_logger
+    from drivers.base_driver import PrinterDriverInterface
+    from drivers.gdi_driver   import GDIDriver
+    from drivers.tspl_driver  import TSPLDriver
+    from drivers.zpl_driver   import ZPLDriver
+    from drivers.epl_driver   import EPLDriver
+    from drivers.pdf_driver   import PDFDriver
+    from services.logging_service import get_logger
 except ModuleNotFoundError:
     from drivers.base_driver import PrinterDriverInterface
     from drivers.gdi_driver   import GDIDriver
@@ -45,11 +45,11 @@ def get_driver(printer_name: str, native_mode: bool = True, force_gdi: bool = Fa
                 pass
 
     try:
-        from backend.drivers.gdi_driver   import GDIDriver as FreshGDI
-        from backend.drivers.tspl_driver  import TSPLDriver as FreshTSPL
-        from backend.drivers.zpl_driver   import ZPLDriver as FreshZPL
-        from backend.drivers.epl_driver   import EPLDriver as FreshEPL
-        from backend.drivers.pdf_driver   import PDFDriver as FreshPDF
+        from drivers.gdi_driver   import GDIDriver as FreshGDI
+        from drivers.tspl_driver  import TSPLDriver as FreshTSPL
+        from drivers.zpl_driver   import ZPLDriver as FreshZPL
+        from drivers.epl_driver   import EPLDriver as FreshEPL
+        from drivers.pdf_driver   import PDFDriver as FreshPDF
     except ModuleNotFoundError:
         from drivers.gdi_driver   import GDIDriver as FreshGDI
         from drivers.tspl_driver  import TSPLDriver as FreshTSPL
@@ -85,7 +85,7 @@ def detect_printer_type(printer_name: str) -> Dict[str, Any]:
     driver = get_driver(printer_name, native_mode=True)
     
     # Check if printer is thermal based on name heuristics or selected driver
-    from backend.services.printer_capabilities import is_thermal_name
+    from services.printer_capabilities import is_thermal_name
     is_thermal = is_thermal_name(printer_name) or not isinstance(driver, (GDIDriver, PDFDriver))
 
     protocol = "GDI"

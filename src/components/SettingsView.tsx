@@ -5,6 +5,7 @@ import { useElectronAPI } from "../hooks/useElectronAPI";
 import logoUrl from "@/assets/logo.png";
 import shubhamGif from "@/assets/shubham.gif";
 import { ConnectionModal } from "./ConnectionModal";
+import { RestartAppModal } from "./RestartAppModal";
 import {
   Printer as PrinterIcon,
   Database,
@@ -133,6 +134,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const electronAPI = useElectronAPI();
   // Navigation Tabs state: 'database' | 'gmail' | 'preferences' | 'about'
   const [activeTab, setActiveTab] = useState<"database" | "gmail" | "preferences" | "about">("database");
+
+  // Restart Modal state on config import
+  const [restartModalInfo, setRestartModalInfo] = useState<{ isOpen: boolean; fileName?: string }>({ isOpen: false });
 
   // Save Settings Status state
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -798,7 +802,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         if (stored) setServers(JSON.parse(stored));
       } catch { /* ignore */ }
 
-      setConfigStatus("✓ Configuration imported. Restart the app for all changes to take effect.");
+      const selectedFileName = dialogRes.filePaths[0].split(/[\\/]/).pop() || dialogRes.filePaths[0];
+      setRestartModalInfo({ isOpen: true, fileName: selectedFileName });
+      setConfigStatus("✓ Configuration imported successfully.");
     } catch (err: any) {
       setConfigStatus(`✗ Import error: ${err.message}`);
     }
@@ -2510,7 +2516,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         BarCode Studio
                       </h3>
                       <span className="text-[10px] font-mono font-extrabold bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 px-3 py-0.5 rounded-full uppercase tracking-wider">
-                        v3.7.1 Pro
+                        v3.7.6 Pro
                       </span>
                     </div>
                     <p className="text-xs text-metro-secondary mt-1 leading-relaxed">
@@ -2752,6 +2758,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           onUpdateDatabaseConfig(true, serverItem.database);
           return { success: true, msg: "Connected" };
         }}
+      />
+
+      <RestartAppModal
+        isOpen={restartModalInfo.isOpen}
+        fileName={restartModalInfo.fileName}
+        theme={theme}
+        onRestart={() => electronAPI.restartApp()}
+        onClose={() => setRestartModalInfo({ isOpen: false })}
       />
     </div>
   );

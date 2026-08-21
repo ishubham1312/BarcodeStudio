@@ -9,7 +9,7 @@ import os
 import sys
 import shutil
 from pathlib import Path
-from backend.services.logging_service import get_logger
+from services.logging_service import get_logger
 
 logger = get_logger()
 

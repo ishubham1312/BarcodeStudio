@@ -80,16 +80,36 @@ def ensure_raqm_dlls():
 
     seen = set()
     for d in raqm_dirs:
-        if d in seen:
+        abs_d = os.path.abspath(d)
+        if abs_d in seen:
             continue
-        seen.add(d)
+        seen.add(abs_d)
+
+        # 1. Prepend to process PATH so Windows C runtime / LoadLibrary inside PIL extensions finds it
         try:
-            if hasattr(os, "add_dll_directory"):
-                os.add_dll_directory(d)
+            current_path = os.environ.get("PATH", "")
+            if abs_d not in current_path.split(";"):
+                os.environ["PATH"] = abs_d + ";" + current_path
         except Exception:
             pass
+
+        # 2. Windows SetDllDirectoryW for win32 dynamic linking
+        try:
+            if hasattr(ctypes, "windll") and hasattr(ctypes.windll, "kernel32"):
+                ctypes.windll.kernel32.SetDllDirectoryW(abs_d)
+        except Exception:
+            pass
+
+        # 3. Python 3.8+ DLL directory registration
+        try:
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(abs_d)
+        except Exception:
+            pass
+
+        # 4. Explicitly load dependencies in order
         for dll in _RAQM_DLL_NAMES:
-            fp = os.path.join(d, dll)
+            fp = os.path.join(abs_d, dll)
             if os.path.exists(fp):
                 try:
                     ctypes.CDLL(fp)

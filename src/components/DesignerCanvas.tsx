@@ -477,67 +477,29 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   const handleFetchAccessionValue = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const queryVal = promptAccessionValue.trim();
-    if (!queryVal) {
+    if (!promptAccessionValue.trim()) {
       setPromptError("Please enter a search value.");
+      return;
+    }
+    if (!activeProfile) {
+      setPromptError("Database profile not active. Please set up SQL Database connection first.");
       return;
     }
 
     setPromptLoading(true);
     setPromptError("");
     try {
-      // 1. Ultra-fast local check in dbRecords cache (< 1ms instant response)
-      if (dbRecords && dbRecords.length > 0) {
-        const queryLower = queryVal.toLowerCase();
-        const localMatch = dbRecords.find(rec => {
-          for (const [k, v] of Object.entries(rec)) {
-            if (v !== undefined && v !== null && String(v).trim().toLowerCase() === queryLower) {
-              return true;
-            }
-          }
-          return false;
-        });
-
-        if (localMatch) {
-          if (onSelectRecord) {
-            onSelectRecord(localMatch);
-          }
-          onPreviewModeChange("live");
-          setShowAccessionPrompt(false);
-          if (onLogMessage) {
-            onLogMessage("success", `Loaded live preview for ${selectedSearchFieldKey}: ${queryVal}`);
-          }
-          return;
-        }
-      }
-
-      if (!activeProfile) {
-        onPreviewModeChange("live");
-        setShowAccessionPrompt(false);
-        if (onLogMessage) {
-          onLogMessage("info", "No active database connection profile. Displaying live preview.");
-        }
-        return;
-      }
-
       const mappedField = mappedFieldsList.find(f => f.key === selectedSearchFieldKey);
       const searchColumn = mappedField ? mappedField.physical : (activeProfile.uniqueField || "AccessionNo");
 
-      // 2-second fast query execution
-      const queryPromise = electronAPI.dbQueryRecord(
+      const data = await electronAPI.dbQueryRecord(
         activeProfile,
         activeProfile.table,
         searchColumn,
-        queryVal
+        promptAccessionValue.trim()
       );
-
-      const timeoutPromise = new Promise<{ success: false; message: string }>((resolve) =>
-        setTimeout(() => resolve({ success: false, message: "Database query timed out (server did not respond in 2 seconds)." }), 2000)
-      );
-
-      const data: any = await Promise.race([queryPromise, timeoutPromise]);
-
-      if (data && data.success && data.record) {
+      if (data.success && data.record) {
+        // Map raw record fields using activeProfile field mappings
         const mappedRecord: any = { ...data.record };
         const fieldMappings = activeProfile.fieldMappings || {};
         const recordAny = data.record as Record<string, any>;
@@ -563,13 +525,13 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         onPreviewModeChange("live");
         setShowAccessionPrompt(false);
         if (onLogMessage) {
-          onLogMessage("success", `Loaded live preview for ${selectedSearchFieldKey}: ${queryVal}`);
+          onLogMessage("success", `Loaded live preview for record matching ${selectedSearchFieldKey}: ${promptAccessionValue.trim()}`);
         }
       } else {
-        setPromptError(data?.message || `No record found in table "${activeProfile.table}" where "${selectedSearchFieldKey}" (${searchColumn}) matches "${queryVal}".`);
+        setPromptError(data.message || `No record found in table "${activeProfile.table}" where "${selectedSearchFieldKey}" (${searchColumn}) matches "${promptAccessionValue.trim()}".`);
       }
     } catch (err: any) {
-      setPromptError(`Query failed: ${err?.message || err}`);
+      setPromptError(`Failed to fetch record: ${err.message}`);
     } finally {
       setPromptLoading(false);
     }
@@ -577,12 +539,9 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   // Parse binding fields. Show appropriate placeholder based on mode and data availability.
   const getRenderedText = (element: LabelElement, recordOverride?: DatabaseRecord | null): string => {
-    const record = recordOverride !== undefined 
-      ? recordOverride 
-      : (activeRecord || (dbRecords && dbRecords.length > 0 ? dbRecords[0] : null));
-
+    const record = recordOverride !== undefined ? recordOverride : activeRecord;
     if (element.fieldName) {
-      // ---- Template Mode: Show raw field token ----
+      // ---- Template Mode: Show raw field token (without braces) ----
       if (previewMode === "template") {
         return `${element.fieldName}`;
       }
@@ -652,12 +611,14 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
           }
         }
 
-        if (dbVal !== "") {
-          return `${element.prefix || ""}${dbVal}${element.suffix || ""}`;
+        if (!dbVal || !dbVal.trim() || dbVal.trim().toLowerCase() === "null" || dbVal.trim().toLowerCase() === "none") {
+          return "";
         }
+
+        return `${element.prefix || ""}${dbVal}${element.suffix || ""}`;
       }
 
-      // ---- Live Mode without Loaded Record: Show Realistic Sample Placeholder Text ----
+      // ---- Live Mode without Loaded Record: Show Sample Placeholder Text ----
       const fieldLower = element.fieldName.toLowerCase();
       let sampleValue = element.fieldName;
 
@@ -1828,16 +1789,18 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   const renderElementContent = (el: LabelElement, renderedText: string) => {
     return (
-      <div className={`w-full h-full relative ${(el.type === 'text' && !(el as any).wrapText) ? 'overflow-visible' : 'overflow-hidden'}`}>
+      <div className={`w-full h-full relative ${(el.type === 'text' && !(el as any).wrapText && !el.autoExpand) ? 'overflow-visible' : 'overflow-hidden'}`}>
         {el.type === "text" && (() => {
-          const wrapEnabled = (el as any).wrapText === true;
+          const wrapEnabled = (el as any).wrapText === true || el.autoExpand === true;
           const baseFontSizePx = (el.fontSize || 10) * (25.4 / 72.0) * mmToPx;
-<<<<<<< HEAD
+          const hasHindi = /[\u0900-\u0D7F]/.test(renderedText || "");
+          const effectiveFontFamily = hasHindi ? "Noto Sans" : (el.fontFamily || "Noto Sans");
+
           const isAutoSizing = el.autoShrink || el.autoExpand;
           const finalFontSizePx = isAutoSizing
             ? getAutoShrunkWrappedFontSize(
               renderedText,
-              el.fontFamily || "Segoe UI",
+              effectiveFontFamily,
               baseFontSizePx,
               el.width * mmToPx,
               el.height * mmToPx,
@@ -1847,52 +1810,30 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
               Boolean(el.autoExpand),
               Boolean(el.autoShrink)
             )
-=======
-          const finalFontSizePx = (el.autoShrink || el.smartFit || el.autoExpand)
-            ? getAutoShrunkWrappedFontSize(
-                renderedText,
-                el.fontFamily || "Segoe UI",
-                baseFontSizePx,
-                el.width * mmToPx,
-                el.height * mmToPx,
-                wrapEnabled,
-                el.fontWeight,
-                el.fontStyle,
-                el.smartFit,
-                el.autoShrink,
-                el.autoExpand
-              )
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
             : baseFontSizePx;
 
-          const isIndic = /[\u0900-\u0D7F\u0600-\u06FF]/.test(renderedText || "");
+          const alignClass =
+            el.textAlign === "center"
+              ? "justify-center"
+              : el.textAlign === "right"
+                ? "justify-end"
+                : "justify-start";
 
           return (
             <div
-              className="h-full flex items-center select-none px-1"
+              className={`h-full flex items-center select-none px-1 ${alignClass}`}
               style={{
-                fontFamily: `"${el.fontFamily || "Segoe UI"}", "Noto Sans UI", "Noto Sans", "Segoe UI", sans-serif`,
+                fontFamily: `"${effectiveFontFamily}", "Noto Sans", "Noto Sans Devanagari", "Noto Sans UI", "Segoe UI", sans-serif`,
                 fontSize: `${finalFontSizePx}px`,
                 fontWeight: el.fontWeight || "normal",
                 fontStyle: el.fontStyle || "normal",
                 color: el.textColor || "#000000",
-<<<<<<< HEAD
-                lineHeight: 1.40,
-=======
-                lineHeight: isIndic ? 1.65 : 1.30,
-                paddingTop: isIndic ? "3px" : "0px",
-                paddingBottom: isIndic ? "3px" : "0px",
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
+                lineHeight: 1.25,
                 whiteSpace: wrapEnabled ? "pre-wrap" : "nowrap",
                 wordBreak: wrapEnabled ? "break-word" : "normal",
                 width: wrapEnabled ? "100%" : "max-content",
+                overflow: wrapEnabled ? "hidden" : "visible",
                 textAlign: el.textAlign || "left",
-                justifyContent:
-                  el.textAlign === "center"
-                    ? "center"
-                    : el.textAlign === "right"
-                      ? "flex-end"
-                      : "flex-start",
               }}
             >
               {renderedText}
@@ -2060,45 +2001,23 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
               onClick={() => {
                 if (previewMode === "live") {
                   onPreviewModeChange("template");
-                  if (onLogMessage) {
-                    onLogMessage("info", "Switched to Design View mode");
-                  }
                 } else {
                   setPromptAccessionValue("");
                   setPromptError("");
                   setShowAccessionPrompt(true);
                 }
               }}
-<<<<<<< HEAD
               className={`p-2 rounded-lg transition-all cursor-pointer border ${previewMode === "live"
                   ? "bg-indigo-500 border-indigo-400 text-white shadow-md"
-=======
-              className={`p-2 rounded-lg transition-all cursor-pointer border ${
-                previewMode === "live"
-                  ? "bg-indigo-500 border-indigo-400 text-white shadow-md shadow-indigo-500/25"
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                   : "border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary"
                 }`}
               title={
                 previewMode === "live"
                   ? "Switch to Design View (Draft Mode)"
-                  : "Enter Accession Number for Live Data Preview"
+                  : "Switch to Live Preview (Actual SQL Data)"
               }
             >
               <Eye className="w-4 h-4" />
-            </button>
-
-            {/* Query Specific Record Button */}
-            <button
-              onClick={() => {
-                setPromptAccessionValue("");
-                setPromptError("");
-                setShowAccessionPrompt(true);
-              }}
-              className="p-2 rounded-lg border border-transparent text-metro-secondary hover:bg-metro-input hover:text-metro-primary transition-all cursor-pointer"
-              title="Query Record from Database for Live View"
-            >
-              <Database className="w-4 h-4 text-indigo-400" />
             </button>
 
             <div className="w-full h-[1px] bg-metro-border/60"></div>
@@ -2778,7 +2697,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                     </div>
                   )}
 
-                  <div className="flex items-center justify-end gap-2 pt-2 text-xs">
+                  <div className="flex justify-end gap-2 pt-2 text-xs">
                     <button
                       type="button"
                       onClick={() => setShowAccessionPrompt(false)}
@@ -2797,7 +2716,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                           <span>Searching...</span>
                         </>
                       ) : (
-                        <span>Load Live View</span>
+                        <span>Load Live Data</span>
                       )}
                     </button>
                   </div>

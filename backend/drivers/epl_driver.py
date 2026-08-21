@@ -4,8 +4,8 @@ epl_driver.py — Eltron EPL printer driver (Placeholder).
 Implements the standard driver interface for future EPL translation and raw printing.
 """
 from typing import Any, Dict, List
-from backend.drivers.base_driver import PrinterDriverInterface
-from backend.services.logging_service import get_logger
+from drivers.base_driver import PrinterDriverInterface
+from services.logging_service import get_logger
 
 logger = get_logger()
 

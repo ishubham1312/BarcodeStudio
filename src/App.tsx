@@ -19,6 +19,7 @@ import { PropertiesPanel } from "./components/PropertiesPanel";
 import { ConnectionModal } from "./components/ConnectionModal";
 import { PrintModal } from "./components/PrintModal";
 import { PageSetupModal } from "./components/PageSetupModal";
+import { RestartAppModal } from "./components/RestartAppModal";
 import logoUrl from "../assets/logo.png";
 import {
   Save,
@@ -436,6 +437,9 @@ export default function App() {
   const [showAddTabMenu, setShowAddTabMenu] = useState<boolean>(false);
   const [addTabMenuCoords, setAddTabMenuCoords] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [isLocked, setIsLocked] = useState<boolean>(false);
+
+  // App restart modal state on config file load / drop
+  const [restartModalInfo, setRestartModalInfo] = useState<{ isOpen: boolean; fileName?: string }>({ isOpen: false });
 
   // Check application telemetry status on mount and poll periodically
   useEffect(() => {
@@ -936,7 +940,7 @@ export default function App() {
   const checkCustomFonts = useCallback((t: LabelTemplate) => {
     const standardFonts = [
       "Arial", "Helvetica", "Times New Roman", "Courier New", "Verdana", "Georgia",
-      "Trebuchet MS", "Impact", "Comic Sans MS", "sans-serif", "serif", "Noto Sans", "Noto Sans-bold", "monospace",
+      "Trebuchet MS", "Impact", "Comic Sans MS", "sans-serif", "serif", "Noto Sans", "Noto Sans Devanagari", "Noto Sans-bold", "monospace",
       "cursive", "system-ui", "Segoe UI", "Roboto", "Inter", "Outfit"
     ];
     const missingFonts: string[] = [];
@@ -1185,8 +1189,8 @@ export default function App() {
         }
 
         const filename = filePath.split(/[\\/]/).pop() || filePath;
-        logMessage("success", `Config imported from ${filename} — restart may be required for all changes.`);
-        alert(`Configuration imported from "${filename}".\n\nPlease restart Barcode Studio for all settings to take full effect.`);
+        logMessage("success", `Config imported from ${filename} — restart required for all changes to take effect.`);
+        setRestartModalInfo({ isOpen: true, fileName: filename });
       } catch (err) {
         logMessage("error", `Failed to apply config file: ${err}`);
       }
@@ -1197,7 +1201,7 @@ export default function App() {
     });
   }, [electronAPI, logMessage]);
 
-  // Drag and Drop support for .bcs files
+  // Drag and Drop support for .bcs and .bcsc files
   useEffect(() => {
     const handleDragOver = (e: DragEvent) => {
       e.preventDefault();
@@ -1211,8 +1215,49 @@ export default function App() {
       const files = e.dataTransfer?.files;
       if (files && files.length > 0) {
         const file = files[0];
-        if (file.name.toLowerCase().endsWith('.bcs') || file.name.toLowerCase().endsWith('.json')) {
-          const filePath = (file as any).path;
+        const lowerName = file.name.toLowerCase();
+        const filePath = (file as any).path;
+
+        if (lowerName.endsWith('.bcsc')) {
+          if (filePath) {
+            try {
+              const readRes = await electronAPI.readTemplateFile(filePath);
+              if (readRes.success && readRes.content) {
+                const bundle = JSON.parse(readRes.content);
+                if (bundle.__bcs_type === "config") {
+                  const lsKeys: Array<[string, string]> = [
+                    ["barcode_studio_sql_servers", JSON.stringify(bundle.barcode_studio_sql_servers || [])],
+                    ["barcode_studio_active_printer", JSON.stringify(bundle.barcode_studio_active_printer || null)],
+                    ["barcode_studio_saved_printers", JSON.stringify(bundle.barcode_studio_saved_printers || [])],
+                    ["windows_barcode_studio_saved_templates", JSON.stringify(bundle.windows_barcode_studio_saved_templates || [])],
+                    ["barcode_studio_custom_presets", JSON.stringify(bundle.barcode_studio_custom_presets || [])],
+                    ["barcode_studio_recent_files", JSON.stringify(bundle.barcode_studio_recent_files || [])],
+                    ["gmail_address", bundle.gmail_address || ""],
+                    ["gmail_app_password", bundle.gmail_app_password || ""],
+                    ["gmail_trigger_subjects", JSON.stringify(bundle.gmail_trigger_subjects || [])],
+                    ["gmail_polling_enabled", bundle.gmail_polling_enabled || "false"],
+                    ["gmail_polling_interval", bundle.gmail_polling_interval || ""],
+                    ["gmail_selected_templates", JSON.stringify(bundle.gmail_selected_templates || [])],
+                    ["gmail_verified_only", bundle.gmail_verified_only || "false"],
+                    ["gmail_verified_senders", JSON.stringify(bundle.gmail_verified_senders || [])],
+                    ["gmail_template_mappings", JSON.stringify(bundle.gmail_template_mappings || {})],
+                  ];
+                  if (bundle.barcode_studio_shortcuts) {
+                    lsKeys.push(["barcode_studio_shortcuts", JSON.stringify(bundle.barcode_studio_shortcuts)]);
+                  }
+                  lsKeys.forEach(([key, value]) => { try { localStorage.setItem(key, value); } catch { } });
+                  if (bundle.py_settings) {
+                    try { await electronAPI.saveSettings(bundle.py_settings); } catch { }
+                  }
+                  logMessage("success", `Config imported from dropped file ${file.name}`);
+                  setRestartModalInfo({ isOpen: true, fileName: file.name });
+                }
+              }
+            } catch (err: any) {
+              logMessage("error", `Dropped config file error: ${err.message}`);
+            }
+          }
+        } else if (lowerName.endsWith('.bcs') || lowerName.endsWith('.json')) {
           if (filePath) {
             try {
               const readRes = await electronAPI.readTemplateFile(filePath);
@@ -3219,6 +3264,15 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Restart App Modal on Config Import / Load */}
+      <RestartAppModal
+        isOpen={restartModalInfo.isOpen}
+        fileName={restartModalInfo.fileName}
+        theme={theme}
+        onRestart={() => electronAPI.restartApp()}
+        onClose={() => setRestartModalInfo({ isOpen: false })}
+      />
 
     </div>
   );

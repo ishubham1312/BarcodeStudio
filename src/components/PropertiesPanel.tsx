@@ -307,13 +307,8 @@ const AnchorParentDropdown: React.FC<{
         <div className="absolute z-50 left-0 right-0 mt-1 bg-metro-panel border border-metro-border rounded-xl shadow-2xl max-h-48 overflow-y-auto custom-scrollbar">
           <div
             className={`px-2.5 py-2 text-xs cursor-pointer transition-colors font-bold ${!selectedElement.parentId
-<<<<<<< HEAD
                 ? 'bg-indigo-500/15 text-indigo-400'
                 : 'text-metro-primary hover:bg-metro-input'
-=======
-              ? 'bg-indigo-500/15 text-indigo-400'
-              : 'text-metro-primary hover:bg-metro-input'
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
               }`}
             onMouseEnter={() => onHighlightElement?.(null)}
             onClick={() => {
@@ -328,13 +323,8 @@ const AnchorParentDropdown: React.FC<{
             <div
               key={el.id}
               className={`px-2.5 py-2 text-xs cursor-pointer transition-colors font-bold ${selectedElement.parentId === el.id
-<<<<<<< HEAD
                   ? 'bg-indigo-500/15 text-indigo-400'
                   : 'text-metro-primary hover:bg-metro-input'
-=======
-                ? 'bg-indigo-500/15 text-indigo-400'
-                : 'text-metro-primary hover:bg-metro-input'
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                 }`}
               onMouseEnter={() => onHighlightElement?.(el.id)}
               onMouseLeave={() => onHighlightElement?.(null)}
@@ -524,24 +514,38 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   };
 
   const [fonts, setFonts] = useState<string[]>([
-    'Noto Sans', 'Segoe UI', 'Inter', 'Arial', 'Courier New', 'Times New Roman',
-    'Georgia', 'Impact', 'Verdana', 'JetBrains Mono', 'Trebuchet MS'
+    'Noto Sans',
+    'Noto Sans Devanagari',
+    'Segoe UI',
+    'Inter',
+    'Arial',
+    'Courier New',
+    'Times New Roman',
+    'Georgia',
+    'Impact',
+    'Verdana',
+    'JetBrains Mono',
+    'Trebuchet MS',
+    'Nirmala UI',
+    'Malgun Gothic',
+    'MS Gothic',
+    'Microsoft YaHei',
+    'Arial Unicode MS',
   ]);
 
   useEffect(() => {
     let active = true;
-    const loadSystemFonts = async () => {
+    const loadPredefinedFonts = async () => {
       try {
         const res = await electronAPI.getSystemFonts();
         if (active && res && res.success && res.fonts && res.fonts.length > 0) {
-          const uniqueFonts = Array.from(new Set(['Noto Sans', ...res.fonts]));
-          setFonts(uniqueFonts);
+          setFonts(res.fonts);
         }
       } catch (err) {
-        console.error("Failed to load system fonts:", err);
+        console.error("Failed to load predefined fonts:", err);
       }
     };
-    loadSystemFonts();
+    loadPredefinedFonts();
     return () => { active = false; };
   }, [electronAPI]);
 
@@ -577,13 +581,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 type="button"
                 onClick={() => setBarcodeTab('properties')}
                 className={`flex-1 py-1.5 rounded-lg text-[10.5px] font-bold text-center transition-all cursor-pointer ${barcodeTab === 'properties'
-<<<<<<< HEAD
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'text-metro-secondary hover:text-metro-primary'
-=======
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-metro-secondary hover:text-metro-primary'
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                   }`}
               >
                 Properties
@@ -592,13 +591,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                 type="button"
                 onClick={() => setBarcodeTab('symbology')}
                 className={`flex-1 py-1.5 rounded-lg text-[10.5px] font-bold text-center transition-all cursor-pointer ${barcodeTab === 'symbology'
-<<<<<<< HEAD
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'text-metro-secondary hover:text-metro-primary'
-=======
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-metro-secondary hover:text-metro-primary'
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                   }`}
               >
                 Symbology
@@ -641,13 +635,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                           onUpdateElement(selectedElement.id, { barcodeType: sym.id });
                         }}
                         className={`w-full text-left p-3 rounded-2xl border flex flex-col gap-2 transition-all cursor-pointer ${isSelected
-<<<<<<< HEAD
                             ? 'bg-indigo-600/15 border-indigo-500 text-metro-primary'
                             : 'bg-black/20 border-metro-border/50 hover:bg-black/40 hover:border-metro-secondary text-metro-secondary hover:text-metro-primary'
-=======
-                          ? 'bg-indigo-600/15 border-indigo-500 text-metro-primary'
-                          : 'bg-black/20 border-metro-border/50 hover:bg-black/40 hover:border-metro-secondary text-metro-secondary hover:text-metro-primary'
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                           }`}
                       >
                         <div className="flex items-center justify-between w-full">
@@ -742,13 +731,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                   <button
                     onClick={() => handleBoolChange('locked', !selectedElement.locked)}
                     className={`flex items-center gap-2 px-3 py-2 border text-[11px] font-bold w-full justify-center transition-all cursor-pointer rounded-xl ${selectedElement.locked
-<<<<<<< HEAD
                         ? 'bg-red-600/15 border-red-500/20 text-red-400 shadow-sm shadow-red-500/5'
                         : 'bg-metro-input border-metro-border text-metro-primary hover:bg-metro-header hover:border-metro-secondary'
-=======
-                      ? 'bg-red-600/15 border-red-500/20 text-red-400 shadow-sm shadow-red-500/5'
-                      : 'bg-metro-input border-metro-border text-metro-primary hover:bg-metro-header hover:border-metro-secondary'
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                       }`}
                   >
                     {selectedElement.locked ? (
@@ -978,13 +962,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                                     setFontDropdownOpen(false);
                                   }}
                                   className={`w-full flex items-center justify-between text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${isSelected
-<<<<<<< HEAD
                                       ? "bg-metro-accent/15 text-metro-accent font-bold"
                                       : "text-metro-primary hover:bg-indigo-600 hover:text-white"
-=======
-                                    ? "bg-metro-accent/15 text-metro-accent font-bold"
-                                    : "text-metro-primary hover:bg-indigo-600 hover:text-white"
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                                     }`}
                                 >
                                   <span style={{ fontFamily: font }}>{font}</span>
@@ -1022,13 +1001,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                     <button
                       onClick={() => handleTextChange('fontWeight', selectedElement.fontWeight === 'bold' ? 'normal' : 'bold')}
                       className={`flex-1 py-1.5 px-2 border rounded-xl text-[11px] font-bold text-center cursor-pointer transition-all duration-150 ${selectedElement.fontWeight === 'bold'
-<<<<<<< HEAD
                           ? 'bg-metro-accent border-metro-accent text-white shadow-sm'
                           : 'border-metro-border text-metro-primary hover:bg-metro-header hover:text-white'
-=======
-                        ? 'bg-metro-accent border-metro-accent text-white shadow-sm'
-                        : 'border-metro-border text-metro-primary hover:bg-metro-header hover:text-white'
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                         }`}
                     >
                       Bold
@@ -1036,13 +1010,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                     <button
                       onClick={() => handleTextChange('fontStyle', selectedElement.fontStyle === 'italic' ? 'normal' : 'italic')}
                       className={`flex-1 py-1.5 px-2 border rounded-xl text-[11px] italic text-center cursor-pointer transition-all duration-150 ${selectedElement.fontStyle === 'italic'
-<<<<<<< HEAD
                           ? 'bg-metro-accent border-metro-accent text-white shadow-sm'
                           : 'border-metro-border text-metro-primary hover:bg-metro-header hover:text-white'
-=======
-                        ? 'bg-metro-accent border-metro-accent text-white shadow-sm'
-                        : 'border-metro-border text-metro-primary hover:bg-metro-header hover:text-white'
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                         }`}
                     >
                       Italic
@@ -1057,13 +1026,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                           key={align}
                           onClick={() => handleTextChange('textAlign', align)}
                           className={`flex-1 py-1.5 flex items-center justify-center transition-all cursor-pointer rounded-lg ${selectedElement.textAlign === align
-<<<<<<< HEAD
                               ? 'bg-metro-accent text-white shadow-sm'
                               : 'hover:bg-metro-header text-metro-secondary hover:text-metro-primary'
-=======
-                            ? 'bg-metro-accent text-white shadow-sm'
-                            : 'hover:bg-metro-header text-metro-secondary hover:text-metro-primary'
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
                             }`}
                         >
                           {align === 'left' && <AlignLeft className="w-3.5 h-3.5" />}
@@ -1090,21 +1054,6 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                         Smart Font Auto-Shrink
                       </span>
                     </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedElement.autoExpand === true}
-                        onChange={e => {
-                          onUpdateElement(selectedElement.id, {
-                            autoExpand: e.target.checked
-                          });
-                        }}
-                        className="rounded border-metro-border text-metro-accent focus:ring-0 bg-metro-input w-4 h-4 cursor-pointer"
-                      />
-                      <span className="text-[11px] text-metro-primary font-semibold" title="Smartly expands font size to fit the container bounding box when text content is short.">
-                        Auto Expand Font (Fit Box)
-                      </span>
-                    </label>
 
                     {selectedElement.type === 'text' && (
                       <label className="flex items-center gap-2 cursor-pointer">
@@ -1118,7 +1067,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                           }}
                           className="rounded border-metro-border text-metro-accent focus:ring-0 bg-metro-input w-4 h-4 cursor-pointer"
                         />
-                        <span className="text-[11px] text-metro-primary font-semibold" title="Smartly expands font size to fill available element box space (for single-line and word-wrapped text)">
+                        <span className="text-[11px] text-metro-primary font-semibold" title="Smartly expands font size to fill the element box (works for both single-line and word-wrapped text)">
                           Smart Font Auto-Expand
                         </span>
                       </label>

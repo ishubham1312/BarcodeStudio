@@ -12,9 +12,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import qrcode
 
-from backend.services.logging_service import get_logger
-from backend.services.printer_service import get_font_path, render_label_image
-from backend.drivers.gdi_driver import calculate_layout_positions
+from services.logging_service import get_logger
+from services.printer_service import get_font_path, render_label_image
+from drivers.gdi_driver import calculate_layout_positions
 
 logger = get_logger()
 
@@ -271,7 +271,7 @@ def draw_vector_element(c: canvas.Canvas, el: Dict[str, Any], label_w_mm: float,
       except Exception as e:
         logger.warning(f"ReportLab vector barcode failed, falling back to raster: {e}")
         try:
-          from backend.services.printer_service import generate_1d_barcode
+          from services.printer_service import generate_1d_barcode
           dpi = 300
           bar_h_mm = el_h_mm - (font_size_pt * 0.352778) - 2.0 if show_text else el_h_mm
           bar_h_mm = max(1.0, bar_h_mm)

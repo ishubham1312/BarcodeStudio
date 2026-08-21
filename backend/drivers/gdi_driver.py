@@ -21,8 +21,8 @@ from typing import Any, Dict, List, Optional
 import ctypes
 from ctypes import wintypes
 
-from backend.drivers.base_driver import PrinterDriverInterface
-from backend.services.logging_service import get_logger
+from drivers.base_driver import PrinterDriverInterface
+from services.logging_service import get_logger
 
 logger = get_logger()
 
@@ -292,8 +292,8 @@ class GDIDriver(PrinterDriverInterface):
         dpi_override: Optional[int] = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        from backend.services.printer_service import render_label_image
-        from backend.services.printer_capabilities import (
+        from services.printer_service import render_label_image
+        from services.printer_capabilities import (
             detect_printer_capabilities,
             resolve_quality_dpi,
             is_thermal_name,

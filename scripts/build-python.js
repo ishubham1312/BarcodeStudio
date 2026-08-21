@@ -16,10 +16,15 @@ function runCommand(command, cwd) {
 
 function build() {
   try {
+    // Kill any running studio_backend instances to avoid Windows file locks
+    try {
+      execSync('python -c "import psutil, os; cur = os.path.abspath(\'backend\'); [p.kill() for p in psutil.process_iter([\'pid\', \'exe\']) if p.info[\'exe\'] and cur.lower() in p.info[\'exe\'].lower()]"', { cwd: rootDir, stdio: 'ignore' });
+    } catch (_) { }
+
     // 1. Ensure pip requirements are installed
     console.log('[Build Python] Checking and installing Python requirements...');
     runCommand('pip install -r requirements.txt', backendDir);
-    
+
     // 2. Install PyInstaller if not installed
     console.log('[Build Python] Ensuring PyInstaller is installed...');
     runCommand('pip install pyinstaller', backendDir);
@@ -27,10 +32,10 @@ function build() {
     // 3. Compile Python backend to single executable using spec file
     console.log('[Build Python] Bundling Python backend into executable...');
     runCommand('pyinstaller --clean app.spec', backendDir);
-    
-    const exePath = path.join(backendDir, 'dist', 'services.exe');
+
+    const exePath = path.join(backendDir, 'dist', 'studio_backend.exe');
     if (fs.existsSync(exePath)) {
-      console.log(`[Build Python] Successfully compiled services.exe at: ${exePath}`);
+      console.log(`[Build Python] Successfully compiled studio_backend.exe at: ${exePath}`);
     } else {
       throw new Error(`Executable not found at ${exePath} after compilation`);
     }

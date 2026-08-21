@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional
 import barcode as barcode_lib
 from barcode.writer import ImageWriter
 import qrcode
-from backend.services.logging_service import get_logger
+from services.logging_service import get_logger
 
 logger = get_logger()
 

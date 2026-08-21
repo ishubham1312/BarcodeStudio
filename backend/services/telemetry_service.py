@@ -4,7 +4,7 @@ from email.header import decode_header
 import json
 from pathlib import Path
 import os
-from backend.services.logging_service import get_logger
+from services.logging_service import get_logger
 
 logger = get_logger()
 

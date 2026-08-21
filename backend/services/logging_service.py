@@ -3,7 +3,7 @@ import os
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from backend.utils.helpers import get_user_data_dir
+from utils.helpers import get_user_data_dir
 
 _logger = None
 
@@ -35,10 +35,14 @@ def setup_logger():
   logger.addHandler(file_handler)
 
   # Console Handler (sys.stdout to prevent stderr misidentification by Electron/process managers)
-  console_handler = logging.StreamHandler(sys.stdout)
-  console_handler.setFormatter(formatter)
-  console_handler.setLevel(logging.INFO)
-  logger.addHandler(console_handler)
+  if sys.stdout is not None:
+    try:
+      console_handler = logging.StreamHandler(sys.stdout)
+      console_handler.setFormatter(formatter)
+      console_handler.setLevel(logging.INFO)
+      logger.addHandler(console_handler)
+    except Exception:
+      pass
 
   _logger = logger
   return logger

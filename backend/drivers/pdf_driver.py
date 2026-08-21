@@ -4,8 +4,8 @@ pdf_driver.py — PDF printer driver.
 Wraps PDF generation and silent spooling using the existing file_service and printLabelPdf flows.
 """
 from typing import Any, Dict, List
-from backend.drivers.base_driver import PrinterDriverInterface
-from backend.services.logging_service import get_logger
+from drivers.base_driver import PrinterDriverInterface
+from services.logging_service import get_logger
 
 logger = get_logger()
 
@@ -31,7 +31,7 @@ class PDFDriver(PrinterDriverInterface):
         dpi_override: Any = None,
     ) -> Dict[str, Any]:
         # Defer import to avoid circular dependency
-        from backend.services.file_service import export_to_pdf
+        from services.file_service import export_to_pdf
         import tempfile
         
         logger.info(f"[PDFDriver] Generating PDF batch print to file...")

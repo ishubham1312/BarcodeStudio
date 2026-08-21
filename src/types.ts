@@ -23,10 +23,7 @@ export interface LabelElement {
   textColor?: string;
   textAlign?: 'left' | 'center' | 'right';
   autoShrink?: boolean;
-<<<<<<< HEAD
-=======
   smartFit?: boolean;
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
   autoExpand?: boolean;
   wrapText?: boolean;
 

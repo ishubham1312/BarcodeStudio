@@ -16,13 +16,36 @@ if backend_dir not in sys.path:
 
 if getattr(sys, 'frozen', False):
     sys.path.insert(0, sys._MEIPASS)
+    import types
+    if 'backend' not in sys.modules:
+        _backend_pkg = types.ModuleType('backend')
+        _backend_pkg.__path__ = [sys._MEIPASS]
+        sys.modules['backend'] = _backend_pkg
+
+# Safe stdout/stderr fallback for windowed / GUI subagent
+class _SafeNullStream:
+    def write(self, s): pass
+    def flush(self): pass
+    def isatty(self): return False
+
+if sys.stdout is None:
+    sys.stdout = _SafeNullStream()
+if sys.stderr is None:
+    sys.stderr = _SafeNullStream()
+
+# Early RAQM Bootstrap to ensure DLL directory and PATH are active before PIL is loaded
+try:
+    from raqm_bootstrap import ensure_raqm_dlls
+    ensure_raqm_dlls()
+except Exception as _e:
+    pass
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-from backend.services.logging_service import setup_logger, get_logger
-from backend.services.settings_service import load_settings, save_settings, get_user_data_dir
-from backend.services.db_service import (
+from services.logging_service import setup_logger, get_logger
+from services.settings_service import load_settings, save_settings, get_user_data_dir
+from services.db_service import (
   bootstrap_database,
   test_db_connection,
   get_databases,
@@ -31,15 +54,15 @@ from backend.services.db_service import (
   get_preview_rows,
   get_record_by_unique_field
 )
-from backend.services.printer_service import (
+from services.printer_service import (
   get_installed_printers,
   get_default_printer_name,
   print_batch_to_spooler
 )
-from backend.services.file_service import export_to_pdf, export_to_png
-from backend.services.barcode_service import generate_1d_barcode, generate_qr_code
-from backend.services.telemetry_service import TelemetryReporter
-from backend.services.gmail_service import poll_gmail_inbox_and_print
+from services.file_service import export_to_pdf, export_to_png
+from services.barcode_service import generate_1d_barcode, generate_qr_code
+from services.telemetry_service import TelemetryReporter
+from services.gmail_service import poll_gmail_inbox_and_print
 import threading
 import time
 
@@ -99,6 +122,31 @@ CORS(app)
 @app.route('/api/health', methods=['GET'])
 def health_check():
   return jsonify({"status": "ok", "message": "Barcode Studio API Service Online"})
+
+PREDEFINED_FONTS = [
+  'Noto Sans',
+  'Noto Sans Devanagari',
+  'Segoe UI',
+  'Inter',
+  'Arial',
+  'Courier New',
+  'Times New Roman',
+  'Georgia',
+  'Impact',
+  'Verdana',
+  'JetBrains Mono',
+  'Trebuchet MS',
+  'Nirmala UI',
+  'Malgun Gothic',
+  'MS Gothic',
+  'Microsoft YaHei',
+  'Arial Unicode MS',
+]
+
+@app.route('/api/fonts', methods=['GET'])
+def get_fonts():
+  """Returns curated predefined fonts guaranteed to work across all systems and bundled with the app."""
+  return jsonify({"success": True, "fonts": PREDEFINED_FONTS})
 
 # --- DATABASE ENDPOINTS ---
 
@@ -173,8 +221,8 @@ def printers_list():
     printers = get_installed_printers()
     # Enrich each printer entry with driver / thermal detection metadata
     try:
-      from backend.drivers.driver_router import detect_printer_type
-      from backend.services.printer_capabilities import is_thermal_name
+      from drivers.driver_router import detect_printer_type
+      from services.printer_capabilities import is_thermal_name
       for p in printers:
         try:
           info = detect_printer_type(p['name'])
@@ -229,7 +277,7 @@ def printers_capabilities():
   if not printer_name:
     return jsonify({"success": False, "message": "'name' query parameter required"}), 400
   try:
-    from backend.services.printer_service import get_printer_capabilities
+    from services.printer_service import get_printer_capabilities
     caps = get_printer_capabilities(printer_name)
     return jsonify({"success": True, **caps})
   except Exception as e:
@@ -371,7 +419,7 @@ def printers_detect_type():
   if not printer_name:
     return jsonify({"success": False, "message": "'name' query parameter required"}), 400
   try:
-    from backend.drivers.driver_router import detect_printer_type
+    from drivers.driver_router import detect_printer_type
     info = detect_printer_type(printer_name)
     return jsonify({"success": True, **info})
   except Exception as e:
@@ -388,8 +436,8 @@ def printers_tspl_test():
   if not printer_name:
     return jsonify({"success": False, "message": "printerName required"}), 400
   try:
-    from backend.drivers.driver_router import get_driver
-    from backend.drivers.tspl_driver import TSPLDriver
+    from drivers.driver_router import get_driver
+    from drivers.tspl_driver import TSPLDriver
     driver = get_driver(printer_name)
     if not isinstance(driver, TSPLDriver):
       return jsonify({
@@ -517,6 +565,10 @@ if __name__ == '__main__':
 
   logger.info(f"Starting Flask backend server on port {args.port}...")
   
-  # Run production-grade Waitress WSGI server in background
+  import logging
+  logging.getLogger("waitress.queue").setLevel(logging.ERROR)
+  logging.getLogger("waitress").setLevel(logging.WARNING)
+
+  # Run production-grade Waitress WSGI server in background with multi-thread pool
   from waitress import serve
-  serve(app, host='127.0.0.1', port=args.port, _quiet=True)
+  serve(app, host='127.0.0.1', port=args.port, threads=16, _quiet=True)

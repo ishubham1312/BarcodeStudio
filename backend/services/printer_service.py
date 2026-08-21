@@ -64,16 +64,36 @@ def ensure_raqm_dlls():
 
     seen = set()
     for d in raqm_dirs:
-        if d in seen:
+        abs_d = os.path.abspath(d)
+        if abs_d in seen:
             continue
-        seen.add(d)
+        seen.add(abs_d)
+
+        # 1. Prepend to process PATH so LoadLibrary in PIL C extensions finds it
         try:
-            if hasattr(os, "add_dll_directory"):
-                os.add_dll_directory(d)
+            current_path = os.environ.get("PATH", "")
+            if abs_d not in current_path.split(";"):
+                os.environ["PATH"] = abs_d + ";" + current_path
         except Exception:
             pass
+
+        # 2. Windows SetDllDirectoryW
+        try:
+            if hasattr(ctypes, "windll") and hasattr(ctypes.windll, "kernel32"):
+                ctypes.windll.kernel32.SetDllDirectoryW(abs_d)
+        except Exception:
+            pass
+
+        # 3. Python 3.8+ add_dll_directory
+        try:
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(abs_d)
+        except Exception:
+            pass
+
+        # 4. Explicitly load dependencies
         for dll in raqm_dll_names:
-            fp = os.path.join(d, dll)
+            fp = os.path.join(abs_d, dll)
             if os.path.exists(fp):
                 try:
                     ctypes.CDLL(fp)
@@ -84,8 +104,8 @@ def ensure_raqm_dlls():
 ensure_raqm_dlls()
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-from backend.services.logging_service import get_logger
-from backend.services.barcode_service import generate_1d_barcode, generate_qr_code
+from services.logging_service import get_logger
+from services.barcode_service import generate_1d_barcode, generate_qr_code
 
 logger = get_logger()
 
@@ -157,7 +177,8 @@ def get_font_path(font_name: str, bold: bool = False, italic: bool = False) -> s
   # Check bundled directory first
   bundled_dir = get_bundled_fonts_dir()
   if os.path.exists(bundled_dir):
-    is_indic = any(k in font_name_clean for k in ['noto sans', 'Noto Sans', 'Noto Sans ui', 'Noto Sans-bold', 'Noto Sans', 'hindi', 'marathi', 'tamil', 'telugu', 'bengali', 'gujarati', 'punjabi', 'devanagari', 'indic'])
+    is_indic = any(k in font_name_clean for k in ['noto sans', 'noto sans ui', 'noto sans-bold', 'hindi', 'marathi', 'tamil', 'telugu', 'bengali', 'gujarati', 'punjabi', 'devanagari', 'indic'])
+    is_nirmala = 'nirmala' in font_name_clean
     is_arial = 'arial' in font_name_clean and 'unicode' not in font_name_clean
     is_segoe = 'segoe' in font_name_clean
     is_msgothic = 'ms gothic' in font_name_clean or 'msgothic' in font_name_clean
@@ -168,6 +189,8 @@ def get_font_path(font_name: str, bold: bool = False, italic: bool = False) -> s
     filename = None
     if is_indic:
       filename = 'Noto Sans.ttf'
+    elif is_nirmala:
+      filename = 'nirmala-bold.ttf' if bold else 'nirmala.ttf'
     elif is_msgothic:
       filename = 'msgothic.ttf'
     elif is_msyh:
@@ -601,9 +624,11 @@ def compute_text_layout(
     def _line_gap(slot: int) -> int:
         return max(2, int(slot * 0.25))
 
+    allow_wrap = wrap_text or auto_expand
+
     def _fits(size: int):
         f = _load(size)
-        if wrap_text:
+        if allow_wrap:
             lines = _wrap(f, max(1, w_px - 2))
             slot = _slot_h(f, size)
             gap = _line_gap(slot)
@@ -617,34 +642,40 @@ def compute_text_layout(
 
     base_size_px = max(1, int(round(float(font_size_pt) * (dpi / 72.0))))
     min_size_px = max(4, int(round(4.0 * (dpi / 72.0))))
-    max_size_px = max(base_size_px + int(round(3.0 * (dpi / 72.0))), int(round(base_size_px * 3.5)))
+    max_search_px = int(h_px) if h_px > 0 else int(round(120.0 * (dpi / 72.0)))
+    max_search_px = max(base_size_px, min(int(round(120.0 * (dpi / 72.0))), max_search_px))
 
     chosen = base_size_px
     if auto_expand:
-        # Grow the font until it fills the element box (never overflows).
+        low = min_size_px
+        high = max_search_px
+        best = base_size_px
+        while low <= high:
+            mid = (low + high) // 2
+            ok, _lines, _slot, _gap = _fits(mid)
+            if ok:
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        if best >= base_size_px or auto_shrink:
+            chosen = best
+        else:
+            chosen = base_size_px
+    elif auto_shrink:
+        # Auto-shrink only: step down from base size until text fits
         size = base_size_px
-        while size <= max_size_px:
+        while size > min_size_px:
             ok, _lines, _slot, _gap = _fits(size)
             if ok:
-                chosen = size
-                size += 1
-            else:
                 break
-
-    # If auto_shrink is enabled and chosen size overflows, step down:
-    if auto_shrink:
-        ok, _, _, _ = _fits(chosen)
-        if not ok:
-            size = chosen
-            while size > min_size_px:
-                size -= 1
-                ok, _, _, _ = _fits(size)
-                if ok:
-                    break
-            chosen = max(min_size_px, size)
+            size -= 1
+        chosen = size
+    else:
+        chosen = base_size_px
 
     font = _load(chosen)
-    if wrap_text:
+    if allow_wrap:
         lines = _wrap(font, max(1, w_px - 2))
     else:
         lines = [text]
@@ -796,7 +827,7 @@ def get_installed_printers() -> List[Dict[str, Any]]:
 
         status = _map_printer_status(status_code)
 
-        from backend.services.printer_capabilities import is_thermal_name
+        from services.printer_capabilities import is_thermal_name
         is_thermal = is_thermal_name(name)
         default_dpi = 203 if is_thermal and not any(k in name.upper() for k in ("300", "TE300", "600")) else 300
 
@@ -865,11 +896,7 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
   width_px  = max(1, int(round(width_mm  * pixels_per_mm)))
   height_px = max(1, int(round(height_mm * pixels_per_mm)))
 
-<<<<<<< HEAD
   # Use exact pixel coordinates matching canvas dimensions
-=======
-  # Exact 1:1 millimeter bounds matching canvas coordinate space
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
   min_x_px = 0
   max_x_px = width_px
   min_y_px = 0
@@ -898,11 +925,7 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
     el_w = el.get("width", 10)
     el_h = el.get("height", 10)
 
-<<<<<<< HEAD
     # Dimensions conversion
-=======
-    # Exact 1:1 dimension conversion from mm to pixels
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
     raw_x = int(round(el_x * pixels_per_mm))
     raw_y = int(round(el_y * pixels_per_mm))
     raw_w = int(round(el_w * pixels_per_mm))
@@ -958,22 +981,66 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
       field_name = el.get("fieldName")
       
       # Case-insensitive data binding replacement
-      if field_name and record:
-        val = None
-        field_name_lower = field_name.lower()
-        for k, v in record.items():
-          if k.lower() == field_name_lower:
-            val = v
-            break
-        # Heuristic fallbacks for accession numbers
-        if val is None and field_name_lower in ['accessionno', 'acc_no', 'accno', 'accession']:
+      if record:
+        if field_name:
+          val = None
+          field_name_lower = field_name.lower()
           for k, v in record.items():
-            if k.lower() in ['accessionno', 'acc_no', 'accno', 'accession']:
-              val = v
+            if k.lower() == field_name_lower and v is not None and str(v).strip() not in ("", "None", "null", "NULL"):
+              val = str(v).strip()
               break
-        if val is not None:
-          text = str(val)
-        
+          # Heuristic fallbacks for accession numbers
+          if val is None and field_name_lower in ['accessionno', 'acc_no', 'accno', 'accession', 'id', 'barcode', 'code']:
+            for k, v in record.items():
+              if k.lower() in ['accessionno', 'acc_no', 'accno', 'accession', 'id', 'barcode', 'code'] and v is not None and str(v).strip() not in ("", "None", "null", "NULL"):
+                val = str(v).strip()
+                break
+          
+          # Alias fallback for title
+          if val is None and field_name_lower in ['title', 'booktitle', 'book_title']:
+            for k, v in record.items():
+              if k.lower() in ['title', 'booktitle', 'book_title'] and v is not None and str(v).strip() not in ("", "None", "null", "NULL"):
+                val = str(v).strip()
+                break
+
+          # Alias fallback for author
+          if val is None and field_name_lower in ['author', 'authorname', 'author_name']:
+            for k, v in record.items():
+              if k.lower() in ['author', 'authorname', 'author_name'] and v is not None and str(v).strip() not in ("", "None", "null", "NULL"):
+                val = str(v).strip()
+                break
+
+          if val is not None:
+            text = str(val)
+          else:
+            # Bound field is NULL in database -> do NOT print placeholder
+            text = ""
+        else:
+          # Check if text matches token like [AccessionNo] or matches a barcode in the same template
+          trimmed = str(text).strip()
+          import re
+          token_match = re.match(r'^[\[{]([a-zA-Z0-9_-]+)[\]}]$', trimmed)
+          if token_match:
+            fld = token_match.group(1).lower()
+            val = None
+            for k, v in record.items():
+              if k.lower() == fld and v is not None and str(v).strip() not in ("", "None", "null", "NULL"):
+                val = str(v).strip()
+                break
+            text = val if val is not None else ""
+          elif any(other.get("type") in ("barcode", "qrcode") and str(other.get("text", "")).strip() == trimmed for other in elements if other.get("id") != el.get("id")):
+            val = None
+            for k in ('AccessionNo', 'acc_no', 'ACC_NO', 'accession', 'id'):
+              if k in record and record[k] is not None and str(record[k]).strip() not in ("", "None", "null", "NULL"):
+                val = str(record[k]).strip()
+                break
+            if val is not None:
+              text = val
+
+      # If text is empty or NULL, do not print anything for this element!
+      if not text or not str(text).strip() or str(text).strip() in ("None", "null", "NULL"):
+        continue
+
       # Text adjustments
       prefix = el.get("prefix", "")
       suffix = el.get("suffix", "")
@@ -1045,66 +1112,11 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
         return _load_text_font(font_candidates, size_px, complex_layout, text)
 
       wrap_text = el.get("wrapText", False)
-<<<<<<< HEAD
       auto_shrink = bool(el.get("autoShrink", False))
       auto_expand = bool(el.get("autoExpand", False))
+      allow_wrap = wrap_text or auto_expand
       is_auto_sizing = auto_shrink or auto_expand
 
-      # Auto-expand: grow the font until it fills the element box (width AND
-      # height) without overflowing. Works for both single-line and wrapped text.
-      clean_text = text.strip() if text else ""
-      can_auto_expand = bool(auto_expand)
-      if can_auto_expand and clean_text:
-        max_grow = max(font_size_px + int(round(3.0 * (dpi / 72.0))), int(round(font_size_px * 3.5)))
-        trial = font_size_px
-        while trial < max_grow:
-          test_size = trial + 1
-          f = _load_font(test_size)
-          if wrap_text:
-            test_lines = wrap_text_pil(text, f, max(1, w - 2))
-            if hasattr(f, 'getmetrics'):
-              ascent, descent = f.getmetrics()
-              base = ascent + descent
-            elif hasattr(f, 'getbbox'):
-              bbox = f.getbbox("ÅgyQj|महाकविपूँ")
-              base = bbox[3] - bbox[1]
-            else:
-              base = int(test_size * 1.2)
-            slot_px = max(int(test_size * 1.2), base)
-            if script_kind == "indic":
-              slot_px += int(test_size * 0.30)
-            elif script_kind in ("arabic", "thai"):
-              slot_px += int(test_size * 0.20)
-            else:
-              slot_px += int(test_size * 0.10)
-            gap_px = max(2, int(slot_px * 0.25))
-            line_height_total_mm = (slot_px + gap_px) / pixels_per_mm
-            max_line_w_px = max([f.getlength(l) if hasattr(f, 'getlength') else (f.getbbox(l)[2] - f.getbbox(l)[0] if hasattr(f, 'getbbox') else len(l) * 8) for l in test_lines], default=0)
-            if total_text_h_mm <= el_h and max_line_w_px <= max(1, w - 2):
-              font_size_px = test_size
-              trial = test_size
-            else:
-              break
-          else:
-            if hasattr(f, 'getlength'):
-              tw = f.getlength(clean_text)
-            elif hasattr(f, 'getbbox'):
-              tw = f.getbbox(clean_text)[2] - f.getbbox(clean_text)[0]
-            else:
-              tw = len(clean_text) * test_size * 0.55
-            fh = int(test_size * 0.75)
-            if tw <= max(1, w - 2) and (h <= 0 or fh <= h):
-              font_size_px = test_size
-              trial = test_size
-            else:
-              break
-
-=======
-      auto_shrink = el.get("autoShrink", False)
-      smart_fit = el.get("smartFit", False)
-      auto_expand = el.get("autoExpand", False) or el.get("auto_expand", False)
-      
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
       # Wrap text helper function — handles both space-separated (Latin) and
       # character-level (Indic/CJK/Arabic) scripts
       def wrap_text_pil(txt: str, fnt: ImageFont.ImageFont, max_w: int) -> list:
@@ -1118,131 +1130,103 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
 
         is_cjk_no_spaces = any(
           (0x4E00 <= ord(c) <= 0x9FFF) or
-          (0x3400 <= ord(c) <= 0x4DBF) or
-          (0x20000 <= ord(c) <= 0x2A6DF) or
           (0x3040 <= ord(c) <= 0x30FF) or
           (0xAC00 <= ord(c) <= 0xD7AF)
           for c in txt
         )
 
-        if not is_cjk_no_spaces and " " in txt:
-          paragraphs = txt.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-          lines = []
-          for para in paragraphs:
-            if not para:
-              lines.append("")
-              continue
+        wrapped_lines = []
+        paragraphs = txt.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+        for para in paragraphs:
+          if not para.strip():
+            wrapped_lines.append("")
+            continue
+
+          if is_cjk_no_spaces:
+            curr_line = ""
+            for char in para:
+              test = curr_line + char
+              if _measure(test) <= max_w:
+                curr_line = test
+              else:
+                if curr_line:
+                  wrapped_lines.append(curr_line)
+                curr_line = char
+            if curr_line:
+              wrapped_lines.append(curr_line)
+          else:
             words = para.split(" ")
-            curr_line_words = []
+            curr_line_words: list = []
             for word in words:
               test_line = " ".join(curr_line_words + [word]) if curr_line_words else word
               if _measure(test_line) <= max_w:
                 curr_line_words.append(word)
               else:
                 if curr_line_words:
-                  lines.append(" ".join(curr_line_words))
+                  wrapped_lines.append(" ".join(curr_line_words))
                   curr_line_words = []
+
                 if _measure(word) > max_w:
                   part = ""
-                  for ch in word:
-                    if _measure(part + ch) <= max_w:
-                      part += ch
+                  for char in word:
+                    if _measure(part + char) <= max_w:
+                      part += char
                     else:
-                      if part: lines.append(part)
-                      part = ch
-                  if part: curr_line_words = [part]
+                      if part:
+                        wrapped_lines.append(part)
+                      part = char
+                  if part:
+                    curr_line_words = [part]
                 else:
                   curr_line_words = [word]
             if curr_line_words:
-              lines.append(" ".join(curr_line_words))
-          return lines if lines else [txt]
-        else:
-          lines = []
-          curr = ""
-          for char in txt:
-            if char == "\n":
-              lines.append(curr)
-              curr = ""
-              continue
-            if _measure(curr + char) <= max_w:
-              curr += char
-            else:
-              if curr:
-                lines.append(curr)
-              curr = char
-          if curr:
-            lines.append(curr)
-          return lines if lines else [txt]
+              wrapped_lines.append(" ".join(curr_line_words))
 
-      is_indic_text = any((0x0900 <= ord(c) <= 0x0D7F) or (0x0600 <= ord(c) <= 0x06FF) for c in (text or ""))
-      line_spacing_ratio = 0.35 if is_indic_text else 0.20
+        return wrapped_lines if wrapped_lines else [txt]
 
-      def _get_line_h_px(f, fs):
-        if hasattr(f, 'getmetrics'):
-          asc, dsc = f.getmetrics()
-          h = asc + dsc
-          return max(h, int(round(fs * 1.35))) if is_indic_text else max(h, fs)
-        elif hasattr(f, 'getbbox'):
-          test_s = "अिैौ्ग्यीÅgjyq|" if is_indic_text else "Ågjyq|"
-          b = f.getbbox(test_s)
-          return max(fs, b[3] - b[1])
-        return fs
-        
-      max_w_bound = max(1, w - 4)
+      # Auto-expand: grow font (single-line or word-wrapped) until it fills the element box
+      clean_text = text.strip() if text else ""
+      can_auto_expand = bool(auto_expand)
+      if can_auto_expand and clean_text:
+        min_size_px = max(4, int(round(4.0 * (dpi / 72.0))))
+        max_search_px = int(h) if h > 0 else int(round(120.0 * (dpi / 72.0)))
+        max_search_px = max(font_size_px, min(int(round(120.0 * (dpi / 72.0))), max_search_px))
 
-      # 1. Determine font_size_px based on flags (auto_expand, smart_fit, auto_shrink)
-      if auto_expand:
-        # Auto-scale up to +3pt max boost over base font size
-        max_boost_px = int(round(3.0 * (dpi / 72.0)))
-        start_size_px = font_size_px + max_boost_px
-        min_size_floor_px = int(round(4.0 * (dpi / 72.0))) if auto_shrink else font_size_px
+        def _test_size(sz: int) -> bool:
+          f = _load_font(sz)
+          lines_t = wrap_text_pil(clean_text, f, max(1, w - 2)) if allow_wrap else [clean_text]
+          if hasattr(f, 'getmetrics'):
+            ascent, descent = f.getmetrics()
+            base = ascent + descent
+          elif hasattr(f, 'getbbox'):
+            bbox = f.getbbox("ÅgyQj|महाकविपूँ")
+            base = bbox[3] - bbox[1]
+          else:
+            base = int(sz * 1.2)
+          slot_t = max(int(sz * 1.2), base)
+          gap_t = max(2, int(slot_t * 0.25))
+          total_t_px = len(lines_t) * slot_t + (len(lines_t) - 1) * gap_t if lines_t else slot_t
+          widest_px = max((f.getlength(l) if hasattr(f, 'getlength') else (f.getbbox(l)[2] - f.getbbox(l)[0] if hasattr(f, 'getbbox') else len(l) * 8) for l in lines_t), default=0)
+          return widest_px <= max(1, w - 2) and (h <= 0 or total_t_px <= h)
 
-        cand_sz = start_size_px
-        while cand_sz >= min_size_floor_px:
-          cand_fnt = _load_font(cand_sz)
-          cand_lines = wrap_text_pil(text, cand_fnt, max_w_bound) if wrap_text else [text]
-          lh_px = _get_line_h_px(cand_fnt, cand_sz)
-          lh_mm = lh_px / pixels_per_mm
-          tot_h_mm = len(cand_lines) * (lh_mm * (1.0 + line_spacing_ratio)) - (lh_mm * line_spacing_ratio)
-          max_w_px = max(cand_fnt.getlength(l) if hasattr(cand_fnt, 'getlength') else (cand_fnt.getbbox(l)[2] - cand_fnt.getbbox(l)[0] if hasattr(cand_fnt, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
+        low = min_size_px
+        high = max_search_px
+        best = font_size_px
+        while low <= high:
+          mid = (low + high) // 2
+          if _test_size(mid):
+            best = mid
+            low = mid + 1
+          else:
+            high = mid - 1
+        if best >= font_size_px or auto_shrink:
+          font_size_px = best
 
-          if max_w_px <= max_w_bound and tot_h_mm <= el_h:
-            font_size_px = cand_sz
-            break
-          cand_sz -= 1
-        else:
-          font_size_px = min_size_floor_px
-
-      elif smart_fit:
-        # Moderate boost (+2pt to +4pt) for short text
-        base_font = _load_font(font_size_px)
-        base_lines = wrap_text_pil(text, base_font, max_w_bound) if wrap_text else [text]
-        base_line_count = len(base_lines)
-        base_lh_px = _get_line_h_px(base_font, font_size_px)
-        base_tot_h_mm = base_line_count * (base_lh_px / pixels_per_mm * (1.0 + line_spacing_ratio)) - (base_lh_px / pixels_per_mm * line_spacing_ratio)
-        base_max_w_px = max(base_font.getlength(l) if hasattr(base_font, 'getlength') else (base_font.getbbox(l)[2] - base_font.getbbox(l)[0] if hasattr(base_font, 'getbbox') else len(l) * 8) for l in base_lines) if base_lines else 0
-
-        if base_tot_h_mm <= el_h and base_max_w_px <= max_w_bound:
-          boost_px = max(2, int(round(4.0 * (dpi / 72.0))))
-          for frac in [1.0, 0.75, 0.5, 0.25]:
-            cand_size = font_size_px + max(1, int(round(boost_px * frac)))
-            cand_font = _load_font(cand_size)
-            cand_lines = wrap_text_pil(text, cand_font, max_w_bound) if wrap_text else [text]
-            if wrap_text and len(cand_lines) > base_line_count:
-              continue
-            cand_lh_px = _get_line_h_px(cand_font, cand_size)
-            cand_tot_h_mm = len(cand_lines) * (cand_lh_px / pixels_per_mm * (1.0 + line_spacing_ratio)) - (cand_lh_px / pixels_per_mm * line_spacing_ratio)
-            cand_max_w_px = max(cand_font.getlength(l) if hasattr(cand_font, 'getlength') else (cand_font.getbbox(l)[2] - cand_font.getbbox(l)[0] if hasattr(cand_font, 'getbbox') else len(l) * 8) for l in cand_lines) if cand_lines else 0
-            if cand_tot_h_mm <= el_h and cand_max_w_px <= max_w_bound:
-              font_size_px = cand_size
-              break
-
-      elif auto_shrink:
-        # Standard auto-shrink down if text overflows
+      if allow_wrap:
         min_size_px = int(round(4.0 * (dpi / 72.0)))
-<<<<<<< HEAD
         if auto_shrink:
-          # Reduce font size until text lines fit strictly within max_w AND el_h (no bottom cropping)
+          # Reduce font size until text lines fit strictly within max_w AND el_h
           while font_size_px > min_size_px:
             font = _load_font(font_size_px)
             lines_to_draw = wrap_text_pil(text, font, max(1, w - 2))
@@ -1254,9 +1238,6 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
               base = bbox[3] - bbox[1]
             else:
               base = int(font_size_px * 1.2)
-            # Glyph slot height = font line box plus breathing room. Scripts with
-            # tall combining marks (Devanagari matras, Arabic, Thai) get extra
-            # headroom so they never collide with the line above/below.
             slot_px = max(int(font_size_px * 1.2), base)
             if script_kind == "indic":
               slot_px += int(font_size_px * 0.30)
@@ -1308,12 +1289,13 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
         # Center vertically inside element bounding box in mm
         start_y_mm = max(0.0, (el_h - total_text_h_mm) / 2.0)
 
-        # Draw each line onto temp_img
+        # Draw each line onto image directly (if unrotated) or onto temp_img (if rotated)
+        angle = el.get("rotation", 0)
         for i, line in enumerate(lines_to_draw):
           if hasattr(font, 'getlength'):
             line_w_px = font.getlength(line)
           elif hasattr(font, 'getbbox'):
-            line_w_px = font.getbbox(line)[2]
+            line_w_px = font.getbbox(line)[2] - font.getbbox(line)[0]
           else:
             line_w_px = 100
 
@@ -1329,17 +1311,26 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
 
           draw_cy_mm = start_y_mm + i * line_height_total_mm + line_h_mm / 2.0
 
-          # Convert to pixels for drawing on temp_img
-          cx_px = int(round(draw_cx_mm * pixels_per_mm))
-          cy_px = int(round(draw_cy_mm * pixels_per_mm))
-
-          if cy_px <= h:
+          if angle == 0:
+            # Draw directly on the main label image to prevent ANY bounding-box clipping or white-box overwrites!
+            abs_cx_px = int(round((el_x + draw_cx_mm) * pixels_per_mm))
+            abs_cy_px = int(round((el_y + draw_cy_mm) * pixels_per_mm))
+            draw.text((abs_cx_px, abs_cy_px), line, font=font, fill=text_color, anchor="mm")
+            if bold:
+              draw.text((abs_cx_px + 1, abs_cy_px), line, font=font, fill=text_color, anchor="mm")
+          else:
+            cx_px = int(round(draw_cx_mm * pixels_per_mm))
+            cy_px = int(round(draw_cy_mm * pixels_per_mm))
             temp_draw.text((cx_px, cy_px), line, font=font, fill=text_color, anchor="mm")
             if bold:
               temp_draw.text((cx_px + 1, cy_px), line, font=font, fill=text_color, anchor="mm")
 
+        if angle == 0:
+          # Clear temp_img so it won't re-paste at the end of the loop
+          temp_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+
       else:
-        # Auto-adjust font size so single-line text fits element width & height
+        # Auto-adjust font size if auto_shrink is enabled
         if auto_shrink:
           min_size = max(4, int(round(4.0 * (dpi / 72.0))))
           max_allowed_w_px = max(10, min(w, width_px - x))
@@ -1371,86 +1362,86 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
           bbox = temp_draw.textbbox((0, 0), text, font=font)
           text_w = bbox[2] - bbox[0]
           text_h = bbox[3] - bbox[1]
-=======
-        while font_size_px > min_size_px:
-          font = _load_font(font_size_px)
-          lines = wrap_text_pil(text, font, max_w_bound) if wrap_text else [text]
-          lh_px = _get_line_h_px(font, font_size_px)
-          lh_mm = lh_px / pixels_per_mm
-          tot_h_mm = len(lines) * (lh_mm * (1.0 + line_spacing_ratio)) - (lh_mm * line_spacing_ratio)
-          max_w_px = max(font.getlength(l) if hasattr(font, 'getlength') else (font.getbbox(l)[2] - font.getbbox(l)[0] if hasattr(font, 'getbbox') else len(l) * 8) for l in lines) if lines else 0
-
-          if tot_h_mm <= el_h and max_w_px <= max_w_bound:
-            break
-          font_size_px -= 1
-
-      # 2. Render text at final computed font_size_px
-      font = _load_font(font_size_px)
-      lines_to_draw = wrap_text_pil(text, font, max_w_bound) if wrap_text else [text]
-      line_h_px = _get_line_h_px(font, font_size_px)
-      line_h_mm = line_h_px / pixels_per_mm
-      line_spacing_mm = line_h_mm * line_spacing_ratio
-      line_height_total_mm = line_h_mm + line_spacing_mm
-      total_text_h_mm = len(lines_to_draw) * line_height_total_mm - line_spacing_mm
-
-      start_y_mm = max(0.0, (el_h - total_text_h_mm) / 2.0)
-
-      for i, line in enumerate(lines_to_draw):
-        if hasattr(font, 'getlength'):
-          line_w_px = font.getlength(line)
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
         elif hasattr(font, 'getbbox'):
-          b = font.getbbox(line)
-          line_w_px = b[2] - b[0]
+          bbox = font.getbbox(text)
+          text_w = bbox[2] - bbox[0]
+          text_h = bbox[3] - bbox[1]
         else:
-          line_w_px = len(line) * 8.0
+          text_w, text_h = temp_draw.textsize(text, font=font) if hasattr(temp_draw, 'textsize') else (100, 20)
+        
+        text_w_mm = text_w / pixels_per_mm
+        text_h_mm = text_h / pixels_per_mm
 
-        line_w_mm = line_w_px / pixels_per_mm
+        # Dynamic inline text position adjustment if anchored right after previous text (matching ZPL driver standard)
+        wrap_text = bool(el.get("wrapText", False))
+        if not wrap_text and last_text_end_x_px > 0 and abs(el_y - last_text_y_mm) < 3.0 and el_x <= (last_text_container_end_x_mm + 5.0):
+          spacing_gap_mm = max(1.0, el_x - last_text_container_end_x_mm) if el_x > last_text_container_end_x_mm else 1.5
+          spacing_gap_px = int(round(spacing_gap_mm * pixels_per_mm))
+          raw_x = last_text_end_x_px + spacing_gap_px
+          x = max(min_x_px, min(raw_x, max_x_px - 1))
 
-<<<<<<< HEAD
         # Center vertically and align horizontally inside the element box using exact canvas coordinates
         pad_x_mm = el_x
         pad_y_mm = el_y
-=======
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
         if text_align == "center":
-          draw_cx_mm = el_w / 2.0
+          draw_cx_mm = pad_x_mm + el_w / 2.0
         elif text_align == "right":
-          draw_cx_mm = el_w - line_w_mm / 2.0
+          draw_cx_mm = pad_x_mm + el_w - text_w_mm / 2.0
         else:
-          draw_cx_mm = line_w_mm / 2.0
+          draw_cx_mm = pad_x_mm + text_w_mm / 2.0
 
-        draw_cy_mm = start_y_mm + i * line_height_total_mm + line_h_mm / 2.0
+        draw_cy_mm = pad_y_mm + el_h / 2.0
 
-        cx_px = int(round(draw_cx_mm * pixels_per_mm))
-        cy_px = int(round(draw_cy_mm * pixels_per_mm))
+        # Convert final coordinates to pixels
+        draw_cx_px = int(round(draw_cx_mm * pixels_per_mm))
+        draw_cy_px = int(round(draw_cy_mm * pixels_per_mm))
 
-<<<<<<< HEAD
         # Clamp drawing center within canvas boundaries so text never bleeds outside the page
         text_half_w_px = int(round(text_w / 2.0))
         text_half_h_px = int(round(text_h / 2.0))
         draw_cx_px = max(text_half_w_px, min(draw_cx_px, width_px - text_half_w_px))
         draw_cy_px = max(text_half_h_px, min(draw_cy_px, height_px - text_half_h_px))
-=======
-        if cy_px <= h:
-          temp_draw.text((cx_px, cy_px), line, font=font, fill=text_color, anchor="mm")
-          if bold:
-            temp_draw.text((cx_px + 1, cy_px), line, font=font, fill=text_color, anchor="mm")
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
 
-      image.paste(temp_img, (x, y), temp_img)
+        if not wrap_text:
+          last_text_end_x_px = draw_cx_px + text_half_w_px
+          last_text_y_mm = el_y
+          last_text_container_end_x_mm = el_x + el_w
+        else:
+          last_text_end_x_px = -1
+
+        image.paste(temp_img, (x, y), temp_img)  # paste blank temp first (for rotation support)
+        # Draw text directly onto the main image — no width clipping
+        draw.text((draw_cx_px, draw_cy_px), text, font=font, fill=text_color, anchor="mm")
+        if bold:
+          draw.text((draw_cx_px + 1, draw_cy_px), text, font=font, fill=text_color, anchor="mm")
+        # Skip the default paste-at-end below by clearing temp_img
+        temp_img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
       
     # 4. Barcode / QR drawing
     elif el_type in ["barcode", "qrcode"]:
-      field_name = el.get("fieldName", "AccessionNo")
-      value = "12345"  # fallback sample
+      field_name = el.get("fieldName") or "AccessionNo"
+      value = ""
       
-      if field_name and record:
-        value = str(record.get(field_name, "") or "12345").strip() or "12345"
+      if record:
+        field_lower = field_name.lower()
+        val = None
+        for k, v in record.items():
+          if k.lower() == field_lower and v is not None and str(v).strip() != "":
+            val = str(v)
+            break
+        if val is None:
+          for k in ('AccessionNo', 'acc_no', 'ACC_NO', 'accession', 'id', 'barcode', 'code'):
+            if k in record and record[k] is not None and str(record[k]).strip() != "":
+              val = str(record[k])
+              break
+        if val is not None:
+          value = str(val).strip()
       
-      # Also check static text value for barcodes
-      if value == "12345" and el.get("text"):
-        value = str(el.get("text", "")).strip() or "12345"
+      if not value and el.get("text"):
+        value = str(el.get("text", "")).strip()
+        
+      if not value:
+        value = "12345678"
         
       try:
         if el_type == "barcode":
@@ -1616,7 +1607,7 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
 def get_printer_capabilities(printer_name: str) -> Dict[str, Any]:
   """Query a printer's capabilities (DPI, colour, printable area, margins)."""
   try:
-    from backend.services.printer_capabilities import detect_printer_capabilities
+    from services.printer_capabilities import detect_printer_capabilities
     return detect_printer_capabilities(printer_name)
   except Exception as ex:
     logger.error(f"[PrintService] Capability detection failed: {ex}")
@@ -1656,7 +1647,7 @@ def print_batch_to_spooler(
   )
 
   try:
-    from backend.drivers.driver_router import get_driver
+    from drivers.driver_router import get_driver
     driver = get_driver(printer_name, native_mode=native_mode)
     logger.info(f"[PrintService] Selected driver: {driver.driver_name}")
     return driver.print_batch(
@@ -1684,7 +1675,7 @@ def _legacy_gdi_print(printer_name: str, records: List[Dict[str, Any]], copies: 
   high-resolution / high-fidelity pipeline is still applied.
   """
   try:
-    from backend.drivers.gdi_driver import GDIDriver
+    from drivers.gdi_driver import GDIDriver
     logger.info("[LegacyGDI] Delegating to GDIDriver for high-resolution print.")
     return GDIDriver().print_batch(
       printer_name, records, copies, template,

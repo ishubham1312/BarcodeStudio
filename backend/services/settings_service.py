@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
-from backend.utils.helpers import get_user_data_dir
-from backend.services.logging_service import get_logger
+from utils.helpers import get_user_data_dir
+from services.logging_service import get_logger
 
 logger = get_logger()
 

@@ -293,6 +293,136 @@ const addPrintHistory = (record: Omit<PrintHistoryRecord, "id" | "timestamp">) =
   }
 };
 
+export const resolveElementContent = (
+  el: any,
+  record: DatabaseRecord | undefined,
+  template?: LabelTemplate,
+  activeProfile?: ConnectionProfile | null,
+): string => {
+  if (!record) return el.text || "";
+
+  let effectiveFieldName = el.fieldName ? String(el.fieldName).trim() : "";
+
+  // Barcodes and QR Codes default to AccessionNo if no fieldName is explicitly specified
+  if (!effectiveFieldName && (el.type === "barcode" || el.type === "qrcode")) {
+    effectiveFieldName = "AccessionNo";
+  }
+
+  // Text elements: check if el.text is a field token like [AccessionNo], {acc_no},
+  // or if el.text matches a barcode in the same template (companion human-readable text)
+  if (!effectiveFieldName && el.type === "text" && el.text) {
+    const trimmed = el.text.trim();
+    const tokenMatch = trimmed.match(/^[\[{]([a-zA-Z0-9_-]+)[\]}]$/);
+    if (tokenMatch) {
+      effectiveFieldName = tokenMatch[1];
+    } else if (template) {
+      const matchingBarcode = template.elements.find(
+        (other: any) =>
+          other.id !== el.id &&
+          (other.type === "barcode" || other.type === "qrcode") &&
+          other.text &&
+          other.text.trim() === trimmed
+      );
+      if (matchingBarcode) {
+        effectiveFieldName = matchingBarcode.fieldName || "AccessionNo";
+      }
+    }
+  }
+
+  // If a field is bound:
+  if (effectiveFieldName) {
+    const lower = effectiveFieldName.toLowerCase();
+    let dbVal: string | null = null;
+
+    const isValidVal = (v: any): boolean => {
+      if (v === undefined || v === null) return false;
+      const s = String(v).trim();
+      return s !== "" && s.toLowerCase() !== "null" && s.toLowerCase() !== "none";
+    };
+
+    // 1. Direct or case-insensitive key match in record
+    for (const key of Object.keys(record)) {
+      if (key.toLowerCase() === lower && isValidVal(record[key])) {
+        dbVal = String(record[key]).trim();
+        break;
+      }
+    }
+
+    // 2. Check activeProfile fieldMappings (logical -> physical column)
+    if (dbVal === null && activeProfile?.fieldMappings) {
+      const physCol = activeProfile.fieldMappings[effectiveFieldName] || activeProfile.fieldMappings[lower];
+      if (physCol && isValidVal(record[physCol])) {
+        dbVal = String(record[physCol]).trim();
+      }
+    }
+
+    // 3. Fallback check for reverse mapping (physical column -> logical key)
+    if (dbVal === null && activeProfile?.fieldMappings) {
+      for (const [logicalKey, physCol] of Object.entries(activeProfile.fieldMappings)) {
+        if (
+          ((physCol as string).toLowerCase() === lower || logicalKey.toLowerCase() === lower) &&
+          isValidVal(record[logicalKey])
+        ) {
+          dbVal = String(record[logicalKey]).trim();
+          break;
+        }
+      }
+    }
+
+    // 4. Common field aliases fallback
+    if (dbVal === null) {
+      const checkKeys = (keys: string[]) => {
+        for (const k of keys) {
+          for (const rk of Object.keys(record)) {
+            if (rk.toLowerCase() === k.toLowerCase() && isValidVal(record[rk])) {
+              return String(record[rk]).trim();
+            }
+          }
+        }
+        return null;
+      };
+
+      if (['acc_no', 'accessionno', 'accno', 'accession', 'id', 'barcode', 'code'].includes(lower)) {
+        dbVal = checkKeys(['ACC_NO', 'AccessionNo', 'Acc_No', 'ACCNO', 'accession', 'acc_num', 'accession_no', 'id', 'barcode', 'code']);
+      } else if (['title', 'booktitle', 'book_title'].includes(lower)) {
+        dbVal = checkKeys(['TITLE', 'BookTitle', 'Book_Title', 'title', 'name']);
+      } else if (['author', 'authorname', 'author_name'].includes(lower)) {
+        dbVal = checkKeys(['AUTHOR', 'Author', 'AuthorName', 'Author_Name', 'author', 'writer']);
+      } else if (['publisher', 'pub_name', 'pubname'].includes(lower)) {
+        dbVal = checkKeys(['PUBLISHER', 'Publisher', 'PublisherName', 'pub_name', 'publisher']);
+      } else if (['call_no', 'callno', 'class_no', 'classno', 'bookno', 'book_no'].includes(lower)) {
+        dbVal = checkKeys(['CALL_NO', 'CallNo', 'ClassNo', 'Class_No', 'BookNo', 'Book_No', 'call_no']);
+      } else if (['year', 'pubyear', 'pub_year'].includes(lower)) {
+        dbVal = checkKeys(['YEAR', 'Year', 'PubYear', 'Pub_Year', 'year']);
+      } else if (['price', 'cost'].includes(lower)) {
+        dbVal = checkKeys(['PRICE', 'Price', 'Cost', 'price']);
+      } else if (lower === 'isbn') {
+        dbVal = checkKeys(['ISBN', 'Isbn', 'isbn']);
+      }
+    }
+
+    // If dbVal was found and valid, format with prefix and suffix
+    if (dbVal !== null && dbVal !== "") {
+      return `${el.prefix || ""}${dbVal}${el.suffix || ""}`;
+    }
+
+    // If it's a barcode/qrcode and primary accession was not in the specific field, try primary accession
+    if (el.type === "barcode" || el.type === "qrcode") {
+      const fallbackAcc = record.AccessionNo || record.acc_no || record.id || Object.values(record)[0];
+      if (isValidVal(fallbackAcc)) {
+        return `${el.prefix || ""}${String(fallbackAcc).trim()}${el.suffix || ""}`;
+      }
+      return "";
+    }
+
+    // When the bound field value is NULL or empty in the database record,
+    // do NOT print anything (return empty string so it never falls back to placeholder text)
+    return "";
+  }
+
+  return el.text || "";
+};
+
 export const PrintModal: React.FC<PrintModalProps> = ({
   isOpen,
   onClose,
@@ -764,14 +894,9 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         const elPixelW = elW * scale;
         const elPixelH = elH * scale;
 
-        let content = el.text || "";
-        if (el.fieldName) {
-          // Look up the database value; fall back to el.text if the field is absent or empty
-          const dbVal = rec[el.fieldName];
-          const resolvedVal = dbVal !== undefined && dbVal !== null && String(dbVal).trim() !== ""
-            ? String(dbVal)
-            : (el.text || "");
-          content = `${el.prefix || ""}${resolvedVal}${el.suffix || ""}`;
+        const content = resolveElementContent(el, rec, t, activeProfile);
+        if (!content || !content.trim()) {
+          continue;
         }
 
         ctx.save();
@@ -979,7 +1104,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           const fontWeight = el.fontWeight || "normal";
           const baseFontSizePx = (el.fontSize || 10) * (25.4 / 72.0) * scale;
           const fontFamily = el.fontFamily || "Segoe UI";
-          const wrapEnabled = (el as any).wrapText === true;
+          const wrapEnabled = (el as any).wrapText === true || el.autoExpand === true;
           const isAutoSizing = el.autoShrink || el.autoExpand;
           const finalFontSizePx = isAutoSizing
             ? getAutoShrunkWrappedFontSize(
@@ -996,7 +1121,9 @@ export const PrintModal: React.FC<PrintModalProps> = ({
             )
             : baseFontSizePx;
 
-          ctx.font = `${fontStyle} ${fontWeight} ${finalFontSizePx}px "${fontFamily}", "Noto Sans UI", "Noto Sans", "Segoe UI", system-ui, sans-serif`;
+          const hasHindi = /[\u0900-\u0D7F]/.test(content || "");
+          const effectiveFontFamily = hasHindi ? "Noto Sans" : (fontFamily || "Segoe UI");
+          ctx.font = `${fontStyle} ${fontWeight} ${finalFontSizePx}px "${effectiveFontFamily}", "Noto Sans", "Noto Sans Devanagari", "Noto Sans UI", "Segoe UI", system-ui, sans-serif`;
 
           let textX = 0;
           if (el.textAlign === "center") {
@@ -1062,7 +1189,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
             };
 
             const wrappedLines = wrapTextCanvas(ctx, content, elPixelW);
-            const lineSpacing = 1.35;
+            const lineSpacing = 1.30;
             const lineHeight = finalFontSizePx * lineSpacing;
             const totalH = wrappedLines.length * lineHeight;
             const startY = Math.max(0, (elPixelH - totalH) / 2);
@@ -1339,7 +1466,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           1,     // copies are already resolved in the queue
           targetTemplate,
           {
-            quality: "high",
+            quality: "auto",
             nativeMode: true,
             calibration: {
               offsetX: calibOffsetX,
@@ -1648,73 +1775,9 @@ export const PrintModal: React.FC<PrintModalProps> = ({
       transformOrigin: "center center",
     };
 
-    // Replace Field Binding
-    let content = el.text || "";
-    if (el.fieldName) {
-      const lower = el.fieldName.toLowerCase();
-      let dbVal = "";
-
-      // 1. Direct or case-insensitive key match
-      for (const key of Object.keys(record)) {
-        if (key.toLowerCase() === lower) {
-          dbVal = String(record[key] ?? "");
-          break;
-        }
-      }
-
-      // 2. Check activeProfile field mappings if direct match failed
-      if (!dbVal && activeProfile?.fieldMappings) {
-        const physCol = activeProfile.fieldMappings[el.fieldName] || activeProfile.fieldMappings[lower];
-        if (physCol && record[physCol] !== undefined) {
-          dbVal = String(record[physCol] ?? "");
-        }
-      }
-
-      // 3. Fallback check for reverse mapping
-      if (!dbVal && activeProfile?.fieldMappings) {
-        for (const [logicalKey, physCol] of Object.entries(activeProfile.fieldMappings)) {
-          if ((physCol as string).toLowerCase() === lower && record[logicalKey] !== undefined) {
-            dbVal = String(record[logicalKey] ?? "");
-            break;
-          }
-        }
-      }
-
-      // 4. Common field aliases fallback
-      if (!dbVal) {
-        const checkKeys = (keys: string[]) => {
-          for (const k of keys) {
-            for (const rk of Object.keys(record)) {
-              if (rk.toLowerCase() === k.toLowerCase() && record[rk] !== undefined && record[rk] !== null && record[rk] !== "") {
-                return String(record[rk]);
-              }
-            }
-          }
-          return "";
-        };
-
-        if (lower === 'acc_no' || lower === 'accessionno' || lower === 'accno' || lower === 'accession') {
-          dbVal = checkKeys(['ACC_NO', 'AccessionNo', 'Acc_No', 'ACCNO', 'accession', 'id']);
-        } else if (lower === 'title' || lower === 'booktitle' || lower === 'book_title') {
-          dbVal = checkKeys(['TITLE', 'BookTitle', 'Book_Title', 'title', 'name']);
-        } else if (lower === 'author' || lower === 'authorname' || lower === 'author_name') {
-          dbVal = checkKeys(['AUTHOR', 'Author', 'AuthorName', 'Author_Name', 'author', 'writer']);
-        } else if (lower === 'publisher' || lower === 'pub_name' || lower === 'pubname') {
-          dbVal = checkKeys(['PUBLISHER', 'Publisher', 'PublisherName', 'pub_name', 'publisher']);
-        } else if (lower === 'call_no' || lower === 'callno' || lower === 'class_no' || lower === 'classno') {
-          dbVal = checkKeys(['CALL_NO', 'CallNo', 'ClassNo', 'Class_No', 'call_no']);
-        } else if (lower === 'barcode' || lower === 'code') {
-          dbVal = checkKeys(['BARCODE', 'Barcode', 'Code', 'barcode']);
-        } else if (lower === 'year' || lower === 'pubyear' || lower === 'pub_year') {
-          dbVal = checkKeys(['YEAR', 'Year', 'PubYear', 'Pub_Year', 'year']);
-        } else if (lower === 'price' || lower === 'cost') {
-          dbVal = checkKeys(['PRICE', 'Price', 'Cost', 'price']);
-        } else if (lower === 'isbn') {
-          dbVal = checkKeys(['ISBN', 'Isbn', 'isbn']);
-        }
-      }
-
-      content = `${el.prefix || ""}${dbVal}${el.suffix || ""}`;
+    const content = resolveElementContent(el, record, itemTemplate, activeProfile);
+    if (!content || !content.trim()) {
+      return null;
     }
 
     if (el.type === "barcode") {
@@ -1816,50 +1879,38 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           ? "justify-end"
           : "justify-start";
     const baseFontSizePx = (el.fontSize || 10) * (25.4 / 72.0) * mmToPx;
-    const wrapEnabled = (el as any).wrapText === true;
-<<<<<<< HEAD
+    const hasHindi = /[\u0900-\u0D7F]/.test(content || "");
+    const effectiveFontFamily = hasHindi ? "Noto Sans" : (el.fontFamily || "Segoe UI");
+    const wrapEnabled = (el as any).wrapText === true || el.autoExpand === true;
     const isAutoSizing = el.autoShrink || el.autoExpand;
     const finalFontSizePx = isAutoSizing
-=======
-    const finalFontSizePx = (el.autoShrink || el.smartFit || el.autoExpand)
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
       ? getAutoShrunkWrappedFontSize(
         content,
-        el.fontFamily || "Segoe UI",
+        effectiveFontFamily,
         baseFontSizePx,
         elW * mmToPx,
         elH * mmToPx,
         wrapEnabled,
         el.fontWeight,
         el.fontStyle,
-<<<<<<< HEAD
         Boolean(el.autoExpand),
         Boolean(el.autoShrink)
-=======
-        el.smartFit,
-        el.autoShrink,
-        el.autoExpand
->>>>>>> d0e4f23f974bad87a7ff9af2a720f1c105950927
       )
       : baseFontSizePx;
-
-    const isIndicContent = /[\u0900-\u0D7F\u0600-\u06FF]/.test(content || "");
 
     return (
       <div
         key={el.id}
         style={{
           ...style,
-          fontFamily: el.fontFamily || "Segoe UI",
+          fontFamily: `"${effectiveFontFamily}", "Noto Sans", "Noto Sans Devanagari", "Noto Sans UI", "Segoe UI", sans-serif`,
           fontSize: `${finalFontSizePx}px`,
           fontWeight: el.fontWeight || "normal",
           fontStyle: el.fontStyle || "normal",
           color: el.textColor || "#000000",
           display: "flex",
           alignItems: "center",
-          lineHeight: isIndicContent ? 1.65 : 1.30,
-          paddingTop: isIndicContent ? "3px" : "0px",
-          paddingBottom: isIndicContent ? "3px" : "0px",
+          lineHeight: 1.25,
           whiteSpace: wrapEnabled ? "pre-wrap" : "nowrap",
           wordBreak: wrapEnabled ? "break-word" : "normal",
           width: wrapEnabled ? "100%" : "max-content",
@@ -1933,8 +1984,12 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                   </div>
                   <div className="flex items-center justify-between">
                     {searchError ? (
-                      <span className={`text-[9.5px] font-semibold flex-1 leading-tight flex items-center gap-1.5 ${isLight ? 'text-red-600' : 'text-red-400'}`}>
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {searchError}
+                      <span className={`text-[9.5px] font-semibold flex-1 leading-tight flex items-center gap-1.5 ${searchError === "Please enter at least one key identifier"
+                          ? (isLight ? 'text-slate-500' : 'text-slate-400')
+                          : (isLight ? 'text-red-600' : 'text-red-400')
+                        }`}>
+                        {searchError !== "Please enter at least one key identifier" && <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
+                        {searchError}
                       </span>
                     ) : (
                       <span className="text-[9.5px] flex-1 leading-tight font-medium">
@@ -1944,7 +1999,8 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                             {selectedRecords.length} records linked
                           </span>
                         ) : (
-                          <span className={isLight ? 'text-slate-500' : 'text-slate-400'}>
+                          <span className={`font-semibold flex items-center gap-1.5 ${isLight ? 'text-red-600' : 'text-red-400'}`}>
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                             Enter identifiers to match labels
                           </span>
                         )}
