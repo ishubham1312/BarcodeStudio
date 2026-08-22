@@ -236,7 +236,20 @@ import {
   AlertCircle,
   ChevronDown,
   Target,
+  Plus,
+  ClipboardPaste,
 } from "lucide-react";
+
+export interface AccessionRowItem {
+  id: string;
+  accessionNumber: string;
+  status: 'idle' | 'loading' | 'found' | 'not_found' | 'error';
+  records: DatabaseRecord[];
+  loading: boolean;
+  error?: string | null;
+  validationResult?: any;
+  requestVersion: number;
+}
 
 interface PrintModalProps {
   isOpen: boolean;
@@ -498,27 +511,6 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     }
   }, [isOpen, allTemplates]);
 
-  // Configured Unique Field source
-  const [uniqueField, setUniqueField] = useState<string>(
-    template?.uniqueField || allTemplates[0]?.uniqueField || "AccessionNo",
-  );
-
-  // Sourcing Input Modes
-  const [sourcingMode, setSourcingMode] = useState<
-    "single" | "range" | "list" | "select"
-  >("single");
-
-  // Multi-line accession number input (defaults to empty so user enters accession numbers)
-  const [accessionNumbersText, setAccessionNumbersText] = useState<string>(
-    initialAccessionNumbers && initialAccessionNumbers.length > 0
-      ? initialAccessionNumbers.join("\n")
-      : "",
-  );
-
-  const [selectedRecords, setSelectedRecords] = useState<DatabaseRecord[]>([]);
-  const [searchError, setSearchError] = useState("");
-  const [nativeMode, setNativeMode] = useState(true);
-
   // Helper to parse strings like "1234/a1/b2" into base "1234" and abbreviations
   const parseTermAbbreviation = (rawTerm: string) => {
     const parts = rawTerm.split("/");
@@ -543,166 +535,296 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     return { baseTerm, abbreviations };
   };
 
-  // Handle accession numbers search lookup
-  const handleLookup = useCallback(async () => {
-    // ── No active DB profile: build fallback records from entered terms ───────
-    if (!activeProfile) {
-      const terms = accessionNumbersText
-        .split("\n")
-        .map((s) => s.trim())
-        .filter((s) => s !== "");
-      if (terms.length === 0) {
-        setSearchError("Please enter at least one key identifier");
-        setSelectedRecords([]);
+  // Helper to split multi-line, comma, or tab separated accession text
+  const splitAccessionText = (text: string): string[] => {
+    return text
+      .split(/[\r\n,;\t]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  };
+
+  // Accession Number Input State & Async Lookup Cache
+  const [accessionText, setAccessionText] = useState<string>(() => {
+    if (initialAccessionNumbers && initialAccessionNumbers.length > 0) {
+      return initialAccessionNumbers.join("\n");
+    }
+    return "";
+  });
+
+  const [lookupResults, setLookupResults] = useState<
+    Map<string, { status: "found" | "not_found"; record: DatabaseRecord | null }>
+  >(new Map());
+  const [isLookingUp, setIsLookingUp] = useState(false);
+  const [showMissingWarning, setShowMissingWarning] = useState(false);
+  const [nativeMode, setNativeMode] = useState(true);
+
+  // Per-session lookup cache
+  const lookupCache = useRef<Map<string, { success: boolean; record: DatabaseRecord | null; rawRow?: any }>>(new Map());
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lookupVersionRef = useRef(0);
+
+  // Helper to discover the actual physical column for accession lookup in the database table
+  const getLookupPhysicalField = useCallback((profile: any): string => {
+    if (!profile) return "AccessionNo";
+    const mappings = profile.fieldMappings || {};
+    if (profile.uniqueField && mappings[profile.uniqueField]) {
+      return String(mappings[profile.uniqueField]);
+    }
+    const candidates = [profile.uniqueField, "AccessionNo", "Accession_No", "acc_no", "accno", "barcode", "id"].filter(Boolean);
+    for (const cand of candidates) {
+      for (const [logKey, physCol] of Object.entries(mappings)) {
+        if (logKey.toLowerCase() === cand!.toLowerCase() && physCol) {
+          return String(physCol);
+        }
+      }
+    }
+    return profile.uniqueField || "AccessionNo";
+  }, []);
+
+  // High-performance in-memory lookup index for 0ms instant record retrieval
+  const inMemoryRecordsIndex = React.useMemo(() => {
+    const map = new Map<string, DatabaseRecord>();
+    const list = (dbRecords && dbRecords.length > 0) ? dbRecords : (recordsSource || []);
+
+    const indexRecord = (rec: DatabaseRecord) => {
+      if (!rec) return;
+      const logicalUniqueKey = activeProfile?.uniqueField || "AccessionNo";
+      const physKey = activeProfile?.fieldMappings?.[logicalUniqueKey];
+
+      if (rec[logicalUniqueKey] !== undefined) map.set(String(rec[logicalUniqueKey]).trim().toLowerCase(), rec);
+      if (physKey && rec[physKey] !== undefined) map.set(String(rec[physKey]).trim().toLowerCase(), rec);
+      if (rec.AccessionNo !== undefined) map.set(String(rec.AccessionNo).trim().toLowerCase(), rec);
+      if (rec.acc_no !== undefined) map.set(String(rec.acc_no).trim().toLowerCase(), rec);
+      if (rec.barcode !== undefined) map.set(String(rec.barcode).trim().toLowerCase(), rec);
+      if (rec.id !== undefined) map.set(String(rec.id).trim().toLowerCase(), rec);
+
+      // Index all values for rapid match
+      Object.values(rec).forEach((v) => {
+        if (v !== null && v !== undefined) {
+          const s = String(v).trim().toLowerCase();
+          if (s && !map.has(s)) {
+            map.set(s, rec);
+          }
+        }
+      });
+    };
+
+    if (activeRecord) indexRecord(activeRecord);
+    list.forEach(indexRecord);
+    return map;
+  }, [dbRecords, recordsSource, activeRecord, activeProfile]);
+
+  // Process and validate lookups for all parsed accession terms
+  const processLookups = useCallback(
+    async (text: string, version: number) => {
+      const tokens = splitAccessionText(text);
+      if (tokens.length === 0) {
+        setIsLookingUp(false);
+        setLookupResults(new Map());
         return;
       }
-      // Synthesise a minimal record from the entered values so the template
-      // static text fields are preserved and the barcode gets the entered number.
-      const fallbackRecords: DatabaseRecord[] = [];
-      terms.forEach((t) => {
-        const { baseTerm, abbreviations } = parseTermAbbreviation(t);
-        abbreviations.forEach(({ suffix, count }) => {
-          for (let i = 0; i < count; i++) {
-            const finalAccessionNo = baseTerm + suffix;
-            fallbackRecords.push({
-              AccessionNo: finalAccessionNo,
-              acc_no: finalAccessionNo,
-              Title: "",
-              Author: "",
-              Publisher: "",
-              ClassNo: "",
-              BookNo: "",
-              ISBN: "",
-              Edition: "",
-              Year: "",
-              Price: "",
-              Status: "",
-            });
+
+      const distinctBaseTerms = [
+        ...new Set(tokens.map((t) => parseTermAbbreviation(t).baseTerm).filter(Boolean)),
+      ];
+
+      const newResults = new Map<string, { status: "found" | "not_found"; record: DatabaseRecord | null }>();
+      const uncachedTerms: string[] = [];
+
+      distinctBaseTerms.forEach((baseTerm) => {
+        const cleanTerm = baseTerm.toLowerCase();
+
+        // 1. In-memory check (0ms)
+        const memoryMatch = inMemoryRecordsIndex.get(cleanTerm);
+        if (memoryMatch) {
+          lookupCache.current.set(cleanTerm, { success: true, record: memoryMatch });
+          newResults.set(cleanTerm, { status: "found", record: memoryMatch });
+          return;
+        }
+
+        // 2. Standalone mode (0ms)
+        if (!activeProfile) {
+          const synthRecord: DatabaseRecord = {
+            AccessionNo: baseTerm,
+            acc_no: baseTerm,
+            Title: "",
+            Author: "",
+            Publisher: "",
+            ClassNo: "",
+            BookNo: "",
+            ISBN: "",
+            Edition: "",
+            Year: "",
+            Price: "",
+            Status: "",
+          };
+          lookupCache.current.set(cleanTerm, { success: true, record: synthRecord });
+          newResults.set(cleanTerm, { status: "found", record: synthRecord });
+          return;
+        }
+
+        // 3. Check cache
+        if (lookupCache.current.has(cleanTerm)) {
+          const cached = lookupCache.current.get(cleanTerm)!;
+          if (cached.success && cached.record) {
+            newResults.set(cleanTerm, { status: "found", record: cached.record });
+          } else {
+            newResults.set(cleanTerm, { status: "not_found", record: null });
           }
-        });
-      });
-      setSelectedRecords(fallbackRecords);
-      setSearchError("");
-      return;
-    }
-
-    if (!accessionNumbersText.trim()) {
-      setSearchError("Please enter at least one key identifier");
-      setSelectedRecords([]);
-      return;
-    }
-
-    const terms = accessionNumbersText
-      .split("\n")
-      .map((s) => s.trim())
-      .filter((s) => s !== "");
-
-    try {
-      const logicalUniqueKey = activeProfile.uniqueField || 'AccessionNo';
-      const lookupField = activeProfile.fieldMappings?.[logicalUniqueKey] || logicalUniqueKey;
-      let totalFound = 0;
-
-      // Clear the current records and errors before starting the progressive fetch
-      setSelectedRecords([]);
-      setSearchError("");
-
-      const accumulatedRecords: DatabaseRecord[] = [];
-
-      for (const term of terms) {
-        const { baseTerm, abbreviations } = parseTermAbbreviation(term);
-        const data = await electronAPI.dbQueryRecord(activeProfile, activeProfile.table, lookupField, baseTerm);
-
-        const baseRecord: any = {};
-        if (data.success && data.record) {
-          const row = data.record;
-
-          // Map physical columns to logical keys based on profile field mappings
-          const mappings: Record<string, string> = activeProfile.fieldMappings || {};
-          Object.entries(mappings).forEach(([logicalKey, physicalCol]) => {
-            if (physicalCol && row[physicalCol] !== undefined) {
-              baseRecord[logicalKey] = String(row[physicalCol]);
-            }
-          });
-
-          // Fallback mapping for the lookup field if not explicitly mapped
-          if (!baseRecord[logicalUniqueKey] && row[lookupField] !== undefined) {
-            baseRecord[logicalUniqueKey] = String(row[lookupField]);
-          }
-
-          // Include raw physical columns for full flexibility
-          Object.keys(row).forEach(key => {
-            baseRecord[key] = String(row[key]);
-          });
         } else {
-          // DB connected but record not found: still create a fallback with the entered number
-          baseRecord.AccessionNo = baseTerm;
-          baseRecord.acc_no = baseTerm;
-          baseRecord[logicalUniqueKey] = baseTerm;
-          baseRecord[lookupField] = baseTerm;
-          Object.assign(baseRecord, {
-            Title: "", Author: "", Publisher: "", ClassNo: "",
-            BookNo: "", ISBN: "", Edition: "", Year: "", Price: "", Status: "",
-          });
+          uncachedTerms.push(baseTerm);
         }
+      });
 
-        const newlyGenerated: any[] = [];
-        // Apply abbreviations to generate the actual records
-        abbreviations.forEach(({ suffix, count }) => {
-          for (let i = 0; i < count; i++) {
-            const finalAccessionNo = baseTerm + suffix;
-            newlyGenerated.push({
-              ...baseRecord,
-              AccessionNo: finalAccessionNo,
-              acc_no: finalAccessionNo,
-              [logicalUniqueKey]: finalAccessionNo,
-              [lookupField]: finalAccessionNo,
-            });
+      setLookupResults((prev) => new Map([...prev, ...newResults]));
+
+      if (uncachedTerms.length > 0 && activeProfile) {
+        setIsLookingUp(true);
+        const targetTable = activeProfile.table || (activeProfile as any).selectedTable || (activeProfile as any).tableName || "";
+        const lookupField = getLookupPhysicalField(activeProfile);
+
+        try {
+          await Promise.all(
+            uncachedTerms.map(async (baseTerm) => {
+              const cleanTerm = baseTerm.toLowerCase();
+              try {
+                const data = await electronAPI.dbQueryRecord(activeProfile, targetTable, lookupField, baseTerm);
+                if (data && data.success && data.record) {
+                  const rawRow = data.record;
+                  const mappedRecord: any = { ...rawRow };
+                  const mappings: Record<string, string> = activeProfile.fieldMappings || {};
+
+                  Object.entries(mappings).forEach(([logicalKey, physCol]) => {
+                    if (physCol) {
+                      if (rawRow[physCol] !== undefined) {
+                        mappedRecord[logicalKey] = String(rawRow[physCol]);
+                      } else {
+                        for (const [k, v] of Object.entries(rawRow)) {
+                          if (k.toLowerCase() === physCol.toLowerCase()) {
+                            mappedRecord[logicalKey] = String(v ?? "");
+                            break;
+                          }
+                        }
+                      }
+                    }
+                  });
+
+                  const primaryAcc = mappedRecord.AccessionNo || mappedRecord.acc_no || rawRow[lookupField] || baseTerm;
+                  mappedRecord.AccessionNo = primaryAcc;
+                  mappedRecord.acc_no = primaryAcc;
+
+                  lookupCache.current.set(cleanTerm, { success: true, record: mappedRecord, rawRow: rawRow });
+                  newResults.set(cleanTerm, { status: "found", record: mappedRecord });
+                } else {
+                  newResults.set(cleanTerm, { status: "not_found", record: null });
+                }
+              } catch (e) {
+                newResults.set(cleanTerm, { status: "not_found", record: null });
+              }
+            })
+          );
+        } finally {
+          if (lookupVersionRef.current === version) {
+            setIsLookingUp(false);
+            setLookupResults((prev) => new Map([...prev, ...newResults]));
           }
-        });
-
-        if (newlyGenerated.length > 0) {
-          totalFound += newlyGenerated.length;
-          accumulatedRecords.push(...newlyGenerated);
         }
+      } else {
+        setIsLookingUp(false);
       }
+    },
+    [inMemoryRecordsIndex, activeProfile, getLookupPhysicalField, electronAPI]
+  );
 
-      setSelectedRecords(accumulatedRecords);
+  const handleAccessionTextChange = (text: string) => {
+    setAccessionText(text);
+    const newVersion = lookupVersionRef.current + 1;
+    lookupVersionRef.current = newVersion;
 
-      if (totalFound === 0) {
-        setSearchError(
-          `No records found with unique field "${logicalUniqueKey}" (mapped to "${lookupField}") matching the provided identifiers`,
-        );
-      }
-    } catch (err: any) {
-      setSearchError(`Lookup failed: ${err.message}`);
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
-  }, [accessionNumbersText, activeProfile, electronAPI]);
 
-  // Sync / initialize accession numbers input when modal opens
+    if (!activeProfile) {
+      processLookups(text, newVersion);
+    } else {
+      debounceTimerRef.current = setTimeout(() => {
+        processLookups(text, newVersion);
+      }, 250);
+    }
+  };
+
+  // Sync / initialize accession numbers input when modal opens or initial numbers change
   useEffect(() => {
     if (isOpen) {
-      let initialText = "";
-      if (initialAccessionNumbers && initialAccessionNumbers.length > 0) {
-        initialText = initialAccessionNumbers.join("\n");
-      }
-      setAccessionNumbersText(initialText);
-      if (!initialText) {
-        setSelectedRecords([]);
-        setSearchError("");
-      }
+      const initialText = initialAccessionNumbers && initialAccessionNumbers.length > 0
+        ? initialAccessionNumbers.join("\n")
+        : "";
+      setAccessionText(initialText);
+      setShowMissingWarning(false);
+      const newVersion = lookupVersionRef.current + 1;
+      lookupVersionRef.current = newVersion;
+      processLookups(initialText, newVersion);
     }
-  }, [isOpen, initialAccessionNumbers]);
+  }, [isOpen, initialAccessionNumbers, processLookups]);
 
-  // Automatically trigger database query whenever accessionNumbersText or activeProfile changes (debounced)
+  // Reactive Re-check: when in-memory database records arrive or update from App.tsx
   useEffect(() => {
     if (!isOpen) return;
+    const newVersion = lookupVersionRef.current + 1;
+    lookupVersionRef.current = newVersion;
+    processLookups(accessionText, newVersion);
+  }, [inMemoryRecordsIndex, isOpen, activeProfile, processLookups]);
 
-    const timer = setTimeout(() => {
-      handleLookup();
-    }, 400); // 400ms debounce to avoid excessive database calls while typing
+  // Parsed Accession tokens
+  const parsedAccessions = React.useMemo(() => {
+    return splitAccessionText(accessionText);
+  }, [accessionText]);
 
-    return () => clearTimeout(timer);
-  }, [accessionNumbersText, activeProfile, isOpen, handleLookup]);
+  // Preview & Print Data: Only successfully found records
+  const selectedRecords = React.useMemo(() => {
+    const records: DatabaseRecord[] = [];
+    parsedAccessions.forEach((rawTerm) => {
+      const { baseTerm, abbreviations } = parseTermAbbreviation(rawTerm);
+      const cached = lookupResults.get(baseTerm.toLowerCase());
+      if (cached && cached.status === "found" && cached.record) {
+        const logicalUniqueKey = activeProfile?.uniqueField || "AccessionNo";
+        const lookupField = getLookupPhysicalField(activeProfile);
+
+        abbreviations.forEach(({ suffix, count }) => {
+          for (let i = 0; i < count; i++) {
+            const finalAcc = baseTerm + suffix;
+            records.push({
+              ...cached.record!,
+              AccessionNo: finalAcc,
+              acc_no: finalAcc,
+              [logicalUniqueKey]: finalAcc,
+              [lookupField]: finalAcc,
+            });
+          }
+        });
+      }
+    });
+    return records;
+  }, [parsedAccessions, lookupResults, activeProfile, getLookupPhysicalField]);
+
+  const missingAccessionNumbers = React.useMemo(() => {
+    const list: string[] = [];
+    parsedAccessions.forEach((rawTerm) => {
+      const { baseTerm } = parseTermAbbreviation(rawTerm);
+      const cached = lookupResults.get(baseTerm.toLowerCase());
+      if (cached && cached.status === "not_found") {
+        if (!list.includes(rawTerm)) {
+          list.push(rawTerm);
+        }
+      }
+    });
+    return list;
+  }, [parsedAccessions, lookupResults]);
+
+  const hasEnteredAccessions = React.useMemo(() => {
+    return parsedAccessions.length > 0;
+  }, [parsedAccessions]);
 
   // Printing Loop animation states
   const [printing, setPrinting] = useState(false);
@@ -1352,11 +1474,29 @@ export const PrintModal: React.FC<PrintModalProps> = ({
   };
 
   // Execute Printing Job
-  const handlePrintSubmit = async () => {
+  const handlePrintSubmit = () => {
+    if (parsedAccessions.length === 0) {
+      alert("Please enter at least one accession number.");
+      return;
+    }
+
     if (selectedRecords.length === 0) {
-      alert(
-        `No matching records were identified. Check that your unique ID search or selections are valid.`,
-      );
+      alert("No valid accession records were found. Nothing can be printed.");
+      return;
+    }
+
+    // If there are missing accessions, show confirmation warning dialog
+    if (missingAccessionNumbers.length > 0) {
+      setShowMissingWarning(true);
+      return;
+    }
+
+    executePrintJob();
+  };
+
+  const executePrintJob = async () => {
+    if (selectedRecords.length === 0) {
+      alert("No valid accession records were found. Nothing can be printed.");
       return;
     }
 
@@ -1368,7 +1508,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     const safeCopiesExecute = Number(copies) || 1;
     onLogMessage(
       "info",
-      `Preparing print job: ${selectedRecords.length} records × ${safeCopiesExecute} copies → ${selectedPrinter?.name || ''}...`,
+      `Preparing print job: ${selectedRecords.length} valid records × ${safeCopiesExecute} copies → ${selectedPrinter?.name || ''}...`,
     );
 
     const activeTemplates = allTemplates.filter((t) => selectedTemplateIds.includes(t.id));
@@ -1958,55 +2098,108 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         {!printing && !success && (
           <div className={`flex-1 flex overflow-hidden min-h-0 ${isLight ? 'bg-slate-100/60' : 'bg-[#090b11]'}`}>
             {/* LEFT AREA: Sourcing configuration */}
-            <div className={`w-[340px] p-4 border-r ${isLight ? 'bg-white border-slate-200' : 'bg-[#0e111a] border-slate-800'} flex flex-col gap-4 shrink-0 z-10 overflow-y-auto custom-scrollbar`}>
+            <div className={`w-[360px] p-4 border-r ${isLight ? 'bg-white border-slate-200' : 'bg-[#0e111a] border-slate-800'} flex flex-col gap-4 shrink-0 z-10 overflow-y-auto custom-scrollbar`}>
 
               {/* Accession Numbers Section */}
               <div className={`${isLight ? 'bg-slate-50/70 border-slate-200' : 'bg-[#161b2d]/40 border-indigo-500/15'} border rounded-2xl p-3.5 space-y-2.5 shadow-xs`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Hash className={`w-3.5 h-3.5 ${isLight ? 'text-indigo-600' : 'text-indigo-400'}`} />
-                    <span className={`text-[11px] font-extrabold uppercase tracking-wider font-mono ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Hash className={`w-3.5 h-3.5 shrink-0 ${isLight ? 'text-indigo-600' : 'text-indigo-400'}`} />
+                    <span className={`text-xs font-bold tracking-tight truncate ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>
                       Accession Numbers
                     </span>
                   </div>
-                  <span className={`text-[8.5px] px-2 py-0.5 rounded-full font-mono font-bold ${isLight ? 'bg-indigo-50 border border-indigo-200 text-indigo-700' : 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-300'}`}>
-                    1 Per Line
-                  </span>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <div className={`relative rounded-xl border ${isLight ? 'border-slate-300 bg-white focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-500/20' : 'border-slate-700 bg-[#161b2d] focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20'} transition-all overflow-hidden shadow-inner`}>
-                    <textarea
-                      value={accessionNumbersText}
-                      onChange={(e) => setAccessionNumbersText(e.target.value)}
-                      placeholder={`e.g.\n10001\n10002`}
-                      className={`w-full h-20 bg-transparent px-3 py-2 text-xs font-mono font-bold ${isLight ? 'text-slate-900 placeholder-slate-400' : 'text-slate-100 placeholder-slate-500'} outline-none resize-none border-none leading-relaxed`}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    {searchError ? (
-                      <span className={`text-[9.5px] font-semibold flex-1 leading-tight flex items-center gap-1.5 ${searchError === "Please enter at least one key identifier"
-                          ? (isLight ? 'text-slate-500' : 'text-slate-400')
-                          : (isLight ? 'text-red-600' : 'text-red-400')
-                        }`}>
-                        {searchError !== "Please enter at least one key identifier" && <AlertCircle className="w-3.5 h-3.5 shrink-0" />}
-                        {searchError}
-                      </span>
-                    ) : (
-                      <span className="text-[9.5px] flex-1 leading-tight font-medium">
-                        {selectedRecords.length > 0 ? (
-                          <span className={`font-bold flex items-center gap-1.5 ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${isLight ? 'bg-emerald-600' : 'bg-emerald-400'} inline-block animate-pulse`}></span>
-                            {selectedRecords.length} records linked
-                          </span>
-                        ) : (
-                          <span className={`font-semibold flex items-center gap-1.5 ${isLight ? 'text-red-600' : 'text-red-400'}`}>
-                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                            Enter identifiers to match labels
-                          </span>
-                        )}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {isLookingUp && (
+                      <div className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin shrink-0" />
+                    )}
+                    {missingAccessionNumbers.length > 0 && (
+                      <span className={`inline-flex items-center text-[9px] px-2 py-0.5 rounded-full font-mono font-bold whitespace-nowrap ${isLight ? 'bg-red-50 border border-red-200 text-red-700' : 'bg-red-500/15 border border-red-500/30 text-red-300'}`}>
+                        {missingAccessionNumbers.length} Missing
                       </span>
                     )}
+                    <span className={`inline-flex items-center text-[9px] px-2 py-0.5 rounded-full font-mono font-bold whitespace-nowrap ${isLight ? 'bg-indigo-50 border border-indigo-200 text-indigo-700' : 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-300'}`}>
+                      {parsedAccessions.length} {parsedAccessions.length === 1 ? 'Item' : 'Items'}
+                    </span>
+                    {accessionText.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => handleAccessionTextChange('')}
+                        title="Clear all"
+                        className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                          isLight ? 'hover:bg-slate-200/70 text-slate-400 hover:text-slate-700' : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
+                        }`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
+                </div>
+
+                {/* Sleek Native Multi-Line Editor */}
+                <div className={`rounded-xl border transition-all overflow-hidden ${
+                  isLight
+                    ? 'border-slate-300 bg-white focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-500/15 shadow-xs'
+                    : 'border-slate-700/80 bg-[#0e1220] focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 shadow-xs'
+                }`}>
+                  <textarea
+                    value={accessionText}
+                    onChange={(e) => handleAccessionTextChange(e.target.value)}
+                    placeholder={"Enter or paste accession numbers...\ne.g.\n10001\n10002\n10003/c1/c2"}
+                    spellCheck={false}
+                    className={`w-full h-32 p-2.5 text-xs font-mono font-bold bg-transparent outline-none resize-none leading-relaxed custom-scrollbar border-0 block ${
+                      isLight ? 'text-slate-900 placeholder-slate-400' : 'text-slate-100 placeholder-slate-500'
+                    }`}
+                  />
+                </div>
+
+                {/* Status Indicator & Missing Badges */}
+                <div className="space-y-1.5 pt-0.5">
+                  {selectedRecords.length > 0 && missingAccessionNumbers.length === 0 ? (
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className={`font-bold flex items-center gap-1.5 ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${isLight ? 'bg-emerald-600' : 'bg-emerald-400'} inline-block animate-pulse`}></span>
+                        {selectedRecords.length} records ready to print
+                      </span>
+                    </div>
+                  ) : missingAccessionNumbers.length > 0 ? (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className={`font-bold flex items-center gap-1.5 ${isLight ? 'text-amber-700' : 'text-amber-400'}`}>
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{missingAccessionNumbers.length} not found in database:</span>
+                        </span>
+                        {selectedRecords.length > 0 && (
+                          <span className={`font-semibold ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
+                            {selectedRecords.length} valid
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-1 max-h-14 overflow-y-auto custom-scrollbar">
+                        {missingAccessionNumbers.map((term) => (
+                          <span
+                            key={term}
+                            className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-md border ${
+                              isLight
+                                ? 'bg-red-50 text-red-700 border-red-200'
+                                : 'bg-red-500/15 text-red-300 border-red-500/30'
+                            }`}
+                          >
+                            {term}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : parsedAccessions.length > 0 && selectedRecords.length === 0 && !isLookingUp ? (
+                    <div className={`text-[10px] font-semibold flex items-center gap-1.5 ${isLight ? 'text-red-600' : 'text-red-400'}`}>
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>No valid records found in database</span>
+                    </div>
+                  ) : (
+                    <div className={`text-[10px] font-medium ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+                      Paste from Excel, CSV, or type (one per line)
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2362,11 +2555,57 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                     <p className={`text-xs leading-relaxed mt-1.5 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                       {selectedTemplateIds.length === 0
                         ? "Select one or more layout templates from the sidebar options to construct label configurations."
+                        : hasEnteredAccessions && selectedRecords.length === 0
+                        ? "No valid accession records were found. Nothing can be printed."
                         : "Enter valid database codes or accession identifiers in the input card to generate print simulations."}
                     </p>
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* MISSING ACCESSION CONFIRMATION WARNING MODAL */}
+        {showMissingWarning && (
+          <div className="fixed inset-0 bg-black/65 backdrop-blur-xs flex items-center justify-center z-[150] p-4 animate-fade-in">
+            <div className={`w-full max-w-md rounded-2xl p-5 shadow-2xl border ${isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#151928] border-slate-700 text-slate-100'}`}>
+              <div className="flex items-start gap-3.5">
+                <div className={`p-2.5 rounded-xl shrink-0 ${isLight ? 'bg-amber-50 text-amber-600 border border-amber-200' : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'}`}>
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  <h4 className="font-black text-sm tracking-tight">Missing Records Notice</h4>
+                  <p className={`text-xs leading-relaxed font-mono ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
+                    {missingAccessionNumbers.length === 1
+                      ? `1 accession number was not found: ${missingAccessionNumbers[0]}`
+                      : `${missingAccessionNumbers.length} accession numbers were not found: ${missingAccessionNumbers.join(', ')}`
+                    }
+                  </p>
+                  <p className={`text-xs font-semibold pt-1 ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>
+                    The found records can still be printed. Continue?
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2.5 mt-5 pt-3 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowMissingWarning(false)}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'}`}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMissingWarning(false);
+                    executePrintJob();
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition-all cursor-pointer"
+                >
+                  Continue Printing
+                </button>
+              </div>
             </div>
           </div>
         )}
