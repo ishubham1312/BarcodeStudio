@@ -272,13 +272,23 @@ export default function App() {
               const historyList = savedStr ? JSON.parse(savedStr) : [];
 
               result.printedJobs.forEach((job: any) => {
+                const accList = Array.isArray(job.accessionNumbers)
+                  ? job.accessionNumbers
+                  : (typeof job.accessionNo === "string"
+                      ? job.accessionNo.split(/[\r\n,;\t]+/).map((s: string) => s.trim()).filter(Boolean)
+                      : []);
+                const uniqueAccs = Array.from(new Set(accList));
+                const bookCount = job.bookCount || (uniqueAccs.length > 0 ? uniqueAccs.length : (job.copies || 1));
                 historyList.unshift({
                   id: `h-${Math.random().toString(36).substring(2, 9)}`,
                   timestamp: job.timestamp || new Date().toISOString(),
                   method: "email",
                   senderEmail: job.senderEmail,
                   accessionNo: job.accessionNo,
-                  copies: job.copies,
+                  bookCount: bookCount,
+                  copies: bookCount,
+                  totalStickers: job.totalStickers || job.copies || 1,
+                  accessionNumbers: uniqueAccs.length > 0 ? uniqueAccs : (job.accessionNo ? [job.accessionNo] : []),
                   templates: job.templates,
                   printerName: job.printerName,
                   status: job.status,

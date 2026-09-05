@@ -104,35 +104,59 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
     return Array.from(senders).sort();
   }, [history]);
 
-  // Compute Statistics
+  // Helper to extract clean accession numbers from a history record
+  const getRecordAccessions = (record: PrintHistoryRecord): string[] => {
+    if (record.accessionNumbers && record.accessionNumbers.length > 0) {
+      return record.accessionNumbers.map((s) => String(s).trim()).filter(Boolean);
+    }
+    if (!record.accessionNo) return [];
+    return record.accessionNo
+      .split(/[\r\n,;\t]+/)
+      .map((s) => s.trim().replace(/\.\.\.$/, ""))
+      .filter(Boolean);
+  };
+
+  // Compute Statistics - strictly count UNIQUE books (accession numbers)
+  // Any repeated accession number is counted only once (deduplicated)
   const stats = useMemo(() => {
     const now = new Date();
     const todayStr = now.toISOString().split("T")[0];
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
 
-    let todayCount = 0;
-    let monthCount = 0;
-    let totalCount = 0;
+    const todayAccessions = new Set<string>();
+    const monthAccessions = new Set<string>();
+    const totalAccessions = new Set<string>();
+    let totalStickersCount = 0;
 
-    history.forEach(record => {
+    history.forEach((record) => {
       if (record.status === "success") {
-        totalCount += record.copies;
+        const accs = getRecordAccessions(record);
+        accs.forEach((acc) => {
+          totalAccessions.add(acc.toLowerCase());
+        });
+
+        totalStickersCount += record.totalStickers || record.copies || 1;
 
         const recordDate = new Date(record.timestamp);
         const recordDateStr = record.timestamp.split("T")[0];
-        
+
         if (recordDateStr === todayStr) {
-          todayCount += record.copies;
+          accs.forEach((acc) => todayAccessions.add(acc.toLowerCase()));
         }
 
         if (recordDate.getMonth() === currentMonth && recordDate.getFullYear() === currentYear) {
-          monthCount += record.copies;
+          accs.forEach((acc) => monthAccessions.add(acc.toLowerCase()));
         }
       }
     });
 
-    return { todayCount, monthCount, totalCount };
+    return {
+      todayCount: todayAccessions.size,
+      monthCount: monthAccessions.size,
+      totalCount: totalAccessions.size,
+      totalStickersCount,
+    };
   }, [history]);
 
   // Filtered History
@@ -178,13 +202,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   // Export to CSV
   const handleExportCSV = () => {
     try {
-      const headers = ["Timestamp", "Method", "Sender Email", "Accession Numbers", "Total Copies", "Templates Used", "Printer Name", "Status", "Error Message"];
+      const headers = ["Timestamp", "Method", "Sender Email", "Accession Numbers", "Book Count (Unique)", "Total Stickers", "Templates Used", "Printer Name", "Status", "Error Message"];
       const rows = filteredHistory.map(r => [
         new Date(r.timestamp).toLocaleString(),
         r.method.toUpperCase(),
         r.senderEmail || "N/A",
         `"${r.accessionNo}"`,
-        r.copies,
+        r.bookCount || r.accessionNumbers?.length || r.copies || 1,
+        r.totalStickers || r.copies || 1,
         `"${r.templates.join(", ")}"`,
         r.printerName,
         r.status.toUpperCase(),
@@ -265,12 +290,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         }`}>
           <div>
             <span className={`text-[10px] uppercase font-bold tracking-wider ${theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
-              Printed Today
+              Books Printed Today
             </span>
             <div className={`text-2xl font-black mt-1 ${theme === "light" ? "text-slate-900" : "text-white"}`}>
               {stats.todayCount}
             </div>
-            <span className="text-[9px] text-emerald-400 font-semibold mt-1 inline-block">Labels spooled today</span>
+            <span className="text-[9px] text-emerald-400 font-semibold mt-1 inline-block">Unique books spooled today</span>
           </div>
           <div className="p-3 rounded-xl bg-indigo-500/10 text-indigo-400">
             <CheckCircle2 className="w-6 h-6" />
@@ -285,12 +310,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         }`}>
           <div>
             <span className={`text-[10px] uppercase font-bold tracking-wider ${theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
-              Printed This Month
+              Books This Month
             </span>
             <div className={`text-2xl font-black mt-1 ${theme === "light" ? "text-slate-900" : "text-white"}`}>
               {stats.monthCount}
             </div>
-            <span className="text-[9px] text-indigo-400 font-semibold mt-1 inline-block">Active calendar month</span>
+            <span className="text-[9px] text-indigo-400 font-semibold mt-1 inline-block">Unique books this calendar month</span>
           </div>
           <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-400">
             <History className="w-6 h-6" />
@@ -305,12 +330,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         }`}>
           <div>
             <span className={`text-[10px] uppercase font-bold tracking-wider ${theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
-              All-Time Prints
+              All-Time Unique Books
             </span>
             <div className={`text-2xl font-black mt-1 ${theme === "light" ? "text-slate-900" : "text-white"}`}>
               {stats.totalCount}
             </div>
-            <span className="text-[9px] text-slate-400 font-semibold mt-1 inline-block">Printed till now</span>
+            <span className="text-[9px] text-slate-400 font-semibold mt-1 inline-block">
+              Deduplicated books ({stats.totalStickersCount} stickers)
+            </span>
           </div>
           <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400">
             <FileText className="w-6 h-6" />
@@ -445,7 +472,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 <th className="py-3.5 px-5">Method</th>
                 <th className="py-3.5 px-5">Job Source</th>
                 <th className="py-3.5 px-5">Accession(s)</th>
-                <th className="py-3.5 px-5 text-center">Printed</th>
+                <th className="py-3.5 px-5 text-center">Books (Accessions)</th>
                 <th className="py-3.5 px-5">Printer</th>
                 <th className="py-3.5 px-5">Status</th>
                 <th className="py-3.5 px-5 text-right">Action</th>
@@ -503,7 +530,14 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       </td>
                       
                       <td className="py-3 px-5 text-center font-bold text-metro-primary">
-                        {record.copies}
+                        <div>
+                          {record.bookCount || record.accessionNumbers?.length || record.copies || 1} Books
+                        </div>
+                        {record.totalStickers && record.totalStickers !== (record.bookCount || record.copies) && (
+                          <div className="text-[9px] font-normal text-metro-secondary">
+                            ({record.totalStickers} stickers)
+                          </div>
+                        )}
                       </td>
                       
                       <td className="py-3 px-5 text-metro-secondary whitespace-pre-wrap break-words max-w-[150px]" title={record.printerName}>

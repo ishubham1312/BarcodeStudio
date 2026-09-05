@@ -166,8 +166,11 @@ export interface PrintHistoryRecord {
   timestamp: string; // ISO string
   method: "manual" | "email";
   senderEmail?: string;
-  accessionNo: string; // Can be comma-separated list of accession numbers printed
-  copies: number;
+  accessionNo: string; // Comma-separated list of accession numbers printed
+  copies: number; // Stored as book count / total copies
+  bookCount?: number; // Unique books (accession numbers) count
+  totalStickers?: number; // Total physical labels/stickers count
+  accessionNumbers?: string[]; // Array of unique accession numbers printed
   templates: string[]; // List of template names or IDs used
   printerName: string;
   status: "success" | "failed";

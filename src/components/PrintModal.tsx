@@ -301,6 +301,7 @@ const addPrintHistory = (record: Omit<PrintHistoryRecord, "id" | "timestamp">) =
       historyList.pop();
     }
     localStorage.setItem("print_history", JSON.stringify(historyList));
+    window.dispatchEvent(new CustomEvent("print-history-updated"));
   } catch (e) {
     console.error("Failed to save print history:", e);
   }
@@ -353,11 +354,22 @@ export const resolveElementContent = (
       return s !== "" && s.toLowerCase() !== "null" && s.toLowerCase() !== "none";
     };
 
+    // Priority: direct accession key match if field is accession-related
+    if (['accessionno', 'acc_no', 'accno', 'accession', 'id', 'barcode'].includes(lower)) {
+      if (isValidVal(record.AccessionNo)) {
+        dbVal = String(record.AccessionNo).trim();
+      } else if (isValidVal(record.acc_no)) {
+        dbVal = String(record.acc_no).trim();
+      }
+    }
+
     // 1. Direct or case-insensitive key match in record
-    for (const key of Object.keys(record)) {
-      if (key.toLowerCase() === lower && isValidVal(record[key])) {
-        dbVal = String(record[key]).trim();
-        break;
+    if (dbVal === null) {
+      for (const key of Object.keys(record)) {
+        if (key.toLowerCase() === lower && isValidVal(record[key])) {
+          dbVal = String(record[key]).trim();
+          break;
+        }
       }
     }
 
@@ -551,6 +563,9 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     return "";
   });
 
+  const latestTextRef = useRef(accessionText);
+  const wasOpenRef = useRef(false);
+
   const [lookupResults, setLookupResults] = useState<
     Map<string, { status: "found" | "not_found"; record: DatabaseRecord | null }>
   >(new Map());
@@ -582,6 +597,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
   }, []);
 
   // High-performance in-memory lookup index for 0ms instant record retrieval
+  // ONLY index unique accession and primary key columns to prevent false prefix/value matches
   const inMemoryRecordsIndex = React.useMemo(() => {
     const map = new Map<string, DatabaseRecord>();
     const list = (dbRecords && dbRecords.length > 0) ? dbRecords : (recordsSource || []);
@@ -591,22 +607,24 @@ export const PrintModal: React.FC<PrintModalProps> = ({
       const logicalUniqueKey = activeProfile?.uniqueField || "AccessionNo";
       const physKey = activeProfile?.fieldMappings?.[logicalUniqueKey];
 
-      if (rec[logicalUniqueKey] !== undefined) map.set(String(rec[logicalUniqueKey]).trim().toLowerCase(), rec);
-      if (physKey && rec[physKey] !== undefined) map.set(String(rec[physKey]).trim().toLowerCase(), rec);
-      if (rec.AccessionNo !== undefined) map.set(String(rec.AccessionNo).trim().toLowerCase(), rec);
-      if (rec.acc_no !== undefined) map.set(String(rec.acc_no).trim().toLowerCase(), rec);
-      if (rec.barcode !== undefined) map.set(String(rec.barcode).trim().toLowerCase(), rec);
-      if (rec.id !== undefined) map.set(String(rec.id).trim().toLowerCase(), rec);
-
-      // Index all values for rapid match
-      Object.values(rec).forEach((v) => {
-        if (v !== null && v !== undefined) {
-          const s = String(v).trim().toLowerCase();
-          if (s && !map.has(s)) {
-            map.set(s, rec);
-          }
-        }
-      });
+      if (rec[logicalUniqueKey] !== undefined && rec[logicalUniqueKey] !== null) {
+        map.set(String(rec[logicalUniqueKey]).trim().toLowerCase(), rec);
+      }
+      if (physKey && rec[physKey] !== undefined && rec[physKey] !== null) {
+        map.set(String(rec[physKey]).trim().toLowerCase(), rec);
+      }
+      if (rec.AccessionNo !== undefined && rec.AccessionNo !== null) {
+        map.set(String(rec.AccessionNo).trim().toLowerCase(), rec);
+      }
+      if (rec.acc_no !== undefined && rec.acc_no !== null) {
+        map.set(String(rec.acc_no).trim().toLowerCase(), rec);
+      }
+      if (rec.barcode !== undefined && rec.barcode !== null) {
+        map.set(String(rec.barcode).trim().toLowerCase(), rec);
+      }
+      if (rec.id !== undefined && rec.id !== null) {
+        map.set(String(rec.id).trim().toLowerCase(), rec);
+      }
     };
 
     if (activeRecord) indexRecord(activeRecord);
@@ -617,6 +635,8 @@ export const PrintModal: React.FC<PrintModalProps> = ({
   // Process and validate lookups for all parsed accession terms
   const processLookups = useCallback(
     async (text: string, version: number) => {
+      if (version !== lookupVersionRef.current) return;
+
       const tokens = splitAccessionText(text);
       if (tokens.length === 0) {
         setIsLookingUp(false);
@@ -676,6 +696,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         }
       });
 
+      if (version !== lookupVersionRef.current) return;
       setLookupResults((prev) => new Map([...prev, ...newResults]));
 
       if (uncachedTerms.length > 0 && activeProfile) {
@@ -689,6 +710,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
               const cleanTerm = baseTerm.toLowerCase();
               try {
                 const data = await electronAPI.dbQueryRecord(activeProfile, targetTable, lookupField, baseTerm);
+                if (version !== lookupVersionRef.current) return;
                 if (data && data.success && data.record) {
                   const rawRow = data.record;
                   const mappedRecord: any = { ...rawRow };
@@ -716,9 +738,11 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                   lookupCache.current.set(cleanTerm, { success: true, record: mappedRecord, rawRow: rawRow });
                   newResults.set(cleanTerm, { status: "found", record: mappedRecord });
                 } else {
+                  lookupCache.current.set(cleanTerm, { success: false, record: null });
                   newResults.set(cleanTerm, { status: "not_found", record: null });
                 }
               } catch (e) {
+                lookupCache.current.set(cleanTerm, { success: false, record: null });
                 newResults.set(cleanTerm, { status: "not_found", record: null });
               }
             })
@@ -730,7 +754,9 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           }
         }
       } else {
-        setIsLookingUp(false);
+        if (lookupVersionRef.current === version) {
+          setIsLookingUp(false);
+        }
       }
     },
     [inMemoryRecordsIndex, activeProfile, getLookupPhysicalField, electronAPI]
@@ -738,6 +764,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
 
   const handleAccessionTextChange = (text: string) => {
     setAccessionText(text);
+    latestTextRef.current = text;
     const newVersion = lookupVersionRef.current + 1;
     lookupVersionRef.current = newVersion;
 
@@ -754,61 +781,90 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     }
   };
 
-  // Sync / initialize accession numbers input when modal opens or initial numbers change
+  // Sync / initialize accession numbers input ONLY when modal first opens or initialAccessionNumbers change
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !wasOpenRef.current) {
+      wasOpenRef.current = true;
       const initialText = initialAccessionNumbers && initialAccessionNumbers.length > 0
         ? initialAccessionNumbers.join("\n")
         : "";
       setAccessionText(initialText);
+      latestTextRef.current = initialText;
       setShowMissingWarning(false);
       const newVersion = lookupVersionRef.current + 1;
       lookupVersionRef.current = newVersion;
       processLookups(initialText, newVersion);
+    } else if (!isOpen) {
+      wasOpenRef.current = false;
     }
   }, [isOpen, initialAccessionNumbers, processLookups]);
 
-  // Reactive Re-check: when in-memory database records arrive or update from App.tsx
+  // Reactive Re-check: when in-memory database records arrive or update from App.tsx, re-check using LATEST text
   useEffect(() => {
     if (!isOpen) return;
+    const currentText = latestTextRef.current;
+    if (!currentText.trim()) return;
     const newVersion = lookupVersionRef.current + 1;
     lookupVersionRef.current = newVersion;
-    processLookups(accessionText, newVersion);
-  }, [inMemoryRecordsIndex, isOpen, activeProfile, processLookups]);
+    processLookups(currentText, newVersion);
+  }, [inMemoryRecordsIndex, isOpen, processLookups]);
 
   // Parsed Accession tokens
   const parsedAccessions = React.useMemo(() => {
     return splitAccessionText(accessionText);
   }, [accessionText]);
 
-  // Preview & Print Data: Only successfully found records
+  // Preview & Print Data: Generate a record for EVERY parsed accession number.
+  // If matched in DB, enrich with DB fields (Title, Author, etc.).
+  // If DB hasn't loaded yet or not found, generate an immediate fallback record with AccessionNo = finalAcc
+  // so preview and printing ALWAYS reflect exactly what the user typed.
   const selectedRecords = React.useMemo(() => {
     const records: DatabaseRecord[] = [];
     parsedAccessions.forEach((rawTerm) => {
       const { baseTerm, abbreviations } = parseTermAbbreviation(rawTerm);
       const cached = lookupResults.get(baseTerm.toLowerCase());
-      if (cached && cached.status === "found" && cached.record) {
-        const logicalUniqueKey = activeProfile?.uniqueField || "AccessionNo";
-        const lookupField = getLookupPhysicalField(activeProfile);
+      const baseRec = (cached && cached.status === "found" && cached.record) ? cached.record : null;
+      const logicalUniqueKey = activeProfile?.uniqueField || "AccessionNo";
+      const lookupField = getLookupPhysicalField(activeProfile);
 
-        abbreviations.forEach(({ suffix, count }) => {
-          for (let i = 0; i < count; i++) {
-            const finalAcc = baseTerm + suffix;
+      abbreviations.forEach(({ suffix, count }) => {
+        for (let i = 0; i < count; i++) {
+          const finalAcc = baseTerm + suffix;
+          if (baseRec) {
             records.push({
-              ...cached.record!,
+              ...baseRec,
               AccessionNo: finalAcc,
               acc_no: finalAcc,
               [logicalUniqueKey]: finalAcc,
               [lookupField]: finalAcc,
             });
+          } else {
+            // Immediate guaranteed fallback record using entered accession number
+            records.push({
+              AccessionNo: finalAcc,
+              acc_no: finalAcc,
+              [logicalUniqueKey]: finalAcc,
+              [lookupField]: finalAcc,
+              Title: "",
+              Author: "",
+              Publisher: "",
+              ClassNo: "",
+              BookNo: "",
+              ISBN: "",
+              Edition: "",
+              Year: "",
+              Price: "",
+              Status: "",
+            });
           }
-        });
-      }
+        }
+      });
     });
     return records;
   }, [parsedAccessions, lookupResults, activeProfile, getLookupPhysicalField]);
 
   const missingAccessionNumbers = React.useMemo(() => {
+    if (!activeProfile) return [];
     const list: string[] = [];
     parsedAccessions.forEach((rawTerm) => {
       const { baseTerm } = parseTermAbbreviation(rawTerm);
@@ -820,7 +876,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
       }
     });
     return list;
-  }, [parsedAccessions, lookupResults]);
+  }, [parsedAccessions, lookupResults, activeProfile]);
 
   const hasEnteredAccessions = React.useMemo(() => {
     return parsedAccessions.length > 0;
@@ -1569,6 +1625,17 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           `__PDF_BASE64__${pdfBase64}`
         );
 
+        const uniqueJobAccessions = Array.from(
+          new Set(
+            queue
+              .map((item) => item.record.AccessionNo || item.record.acc_no || "")
+              .map((s) => String(s).trim())
+              .filter(Boolean)
+          )
+        );
+        const jobBookCount = uniqueJobAccessions.length > 0 ? uniqueJobAccessions.length : 1;
+        const jobAccessionText = uniqueJobAccessions.join(", ");
+
         if (saveRes.success) {
           setProgress(100);
           setPrintedCount(queue.length);
@@ -1577,8 +1644,11 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           addPrintHistory({
             method: (initialAccessionNumbers && initialAccessionNumbers.length > 0 ? "email" : "manual") as "manual" | "email",
             senderEmail: (initialAccessionNumbers && initialAccessionNumbers.length > 0) ? (senderEmail || "automation@email.com") : senderEmail,
-            accessionNo: queue.map(item => item.record.AccessionNo || item.record.acc_no || '').filter(Boolean).slice(0, 10).join(', ') + (queue.length > 10 ? '...' : ''),
-            copies: queue.length,
+            accessionNo: jobAccessionText,
+            bookCount: jobBookCount,
+            copies: jobBookCount,
+            totalStickers: queue.length,
+            accessionNumbers: uniqueJobAccessions,
             templates: Array.from(new Set(queue.map(item => item.template.name || item.template.id))),
             printerName: "Save to PDF File",
             status: "success"
@@ -1589,8 +1659,11 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           addPrintHistory({
             method: (initialAccessionNumbers && initialAccessionNumbers.length > 0 ? "email" : "manual") as "manual" | "email",
             senderEmail: (initialAccessionNumbers && initialAccessionNumbers.length > 0) ? (senderEmail || "automation@email.com") : senderEmail,
-            accessionNo: queue.map(item => item.record.AccessionNo || item.record.acc_no || '').filter(Boolean).slice(0, 10).join(', ') + (queue.length > 10 ? '...' : ''),
-            copies: queue.length,
+            accessionNo: jobAccessionText,
+            bookCount: jobBookCount,
+            copies: jobBookCount,
+            totalStickers: queue.length,
+            accessionNumbers: uniqueJobAccessions,
             templates: Array.from(new Set(queue.map(item => item.template.name || item.template.id))),
             printerName: "Save to PDF File",
             status: "failed",
@@ -1618,6 +1691,17 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           }
         );
 
+        const uniqueJobAccessions = Array.from(
+          new Set(
+            queue
+              .map((item) => item.record.AccessionNo || item.record.acc_no || "")
+              .map((s) => String(s).trim())
+              .filter(Boolean)
+          )
+        );
+        const jobBookCount = uniqueJobAccessions.length > 0 ? uniqueJobAccessions.length : 1;
+        const jobAccessionText = uniqueJobAccessions.join(", ");
+
         setProgress(100);
         setPrintedCount(queue.length);
 
@@ -1630,8 +1714,11 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           addPrintHistory({
             method: (initialAccessionNumbers && initialAccessionNumbers.length > 0 ? "email" : "manual") as "manual" | "email",
             senderEmail: (initialAccessionNumbers && initialAccessionNumbers.length > 0) ? (senderEmail || "automation@email.com") : senderEmail,
-            accessionNo: queue.map(item => item.record.AccessionNo || item.record.acc_no || '').filter(Boolean).slice(0, 10).join(', ') + (queue.length > 10 ? '...' : ''),
-            copies: queue.length,
+            accessionNo: jobAccessionText,
+            bookCount: jobBookCount,
+            copies: jobBookCount,
+            totalStickers: queue.length,
+            accessionNumbers: uniqueJobAccessions,
             templates: Array.from(new Set(queue.map(item => item.template.name || item.template.id))),
             printerName: selectedPrinter?.name || '',
             status: "success"
@@ -1642,8 +1729,11 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           addPrintHistory({
             method: (initialAccessionNumbers && initialAccessionNumbers.length > 0 ? "email" : "manual") as "manual" | "email",
             senderEmail: (initialAccessionNumbers && initialAccessionNumbers.length > 0) ? (senderEmail || "automation@email.com") : senderEmail,
-            accessionNo: queue.map(item => item.record.AccessionNo || item.record.acc_no || '').filter(Boolean).slice(0, 10).join(', ') + (queue.length > 10 ? '...' : ''),
-            copies: queue.length,
+            accessionNo: jobAccessionText,
+            bookCount: jobBookCount,
+            copies: jobBookCount,
+            totalStickers: queue.length,
+            accessionNumbers: uniqueJobAccessions,
             templates: Array.from(new Set(queue.map(item => item.template.name || item.template.id))),
             printerName: selectedPrinter?.name || '',
             status: "failed",
