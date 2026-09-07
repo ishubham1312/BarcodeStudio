@@ -788,12 +788,33 @@ export default function App() {
 
           setPrinters(merged);
 
-          // Select default printer when available
-          const defaultPrintRes = await electronAPI.getDefaultPrinter();
-          if (defaultPrintRes.success && defaultPrintRes.name) {
-            const foundDefault = merged.find((p: any) => p.name === defaultPrintRes.name);
-            if (foundDefault) {
-              setActivePrinter(foundDefault);
+          // Preserve previously saved active printer if present
+          let hasPreservedActive = false;
+          try {
+            const storedActive = localStorage.getItem("barcode_studio_active_printer");
+            if (storedActive) {
+              const parsedActive = JSON.parse(storedActive);
+              if (parsedActive && parsedActive.name) {
+                const foundActive = merged.find((p: any) => p.name === parsedActive.name);
+                if (foundActive) {
+                  setActivePrinter({ ...foundActive, ...parsedActive });
+                  hasPreservedActive = true;
+                } else {
+                  setActivePrinter(parsedActive);
+                  hasPreservedActive = true;
+                }
+              }
+            }
+          } catch (e) { }
+
+          // Only fall back to Windows default printer if no active printer was previously saved
+          if (!hasPreservedActive) {
+            const defaultPrintRes = await electronAPI.getDefaultPrinter();
+            if (defaultPrintRes.success && defaultPrintRes.name) {
+              const foundDefault = merged.find((p: any) => p.name === defaultPrintRes.name);
+              if (foundDefault) {
+                setActivePrinter(foundDefault);
+              }
             }
           }
         }
@@ -808,27 +829,33 @@ export default function App() {
   }, [electronAPI]);
 
   const handleSelectPrinter = (printer: Printer) => {
+    let printerToSet = printer;
     if (activePrinter && printer.name !== activePrinter.name) {
       const saved = printers.find((p) => p.name === printer.name);
       if (saved) {
-        setActivePrinter(saved);
-        logMessage("info", `Selected printer with saved settings: ${saved.name}`);
-        return;
+        printerToSet = { ...saved, ...printer };
       }
     }
-    setActivePrinter(printer);
+    setActivePrinter(printerToSet);
+    try {
+      localStorage.setItem("barcode_studio_active_printer", JSON.stringify(printerToSet));
+    } catch (e) { }
+    logMessage("info", `Selected printer: ${printerToSet.name}`);
   };
 
   const handleSavePrinterSettings = (updatedPrinter: Printer) => {
     setPrinters((prev) => {
       const exists = prev.some((p) => p.name === updatedPrinter.name);
-      if (exists) {
-        return prev.map((p) => p.name === updatedPrinter.name ? updatedPrinter : p);
-      } else {
-        return [...prev, updatedPrinter];
-      }
+      const updated = exists ? prev.map((p) => p.name === updatedPrinter.name ? updatedPrinter : p) : [...prev, updatedPrinter];
+      try {
+        localStorage.setItem("barcode_studio_saved_printers", JSON.stringify(updated));
+      } catch (e) { }
+      return updated;
     });
     setActivePrinter(updatedPrinter);
+    try {
+      localStorage.setItem("barcode_studio_active_printer", JSON.stringify(updatedPrinter));
+    } catch (e) { }
     logMessage("success", `Permanently saved calibration settings for printer: ${updatedPrinter.name}`);
   };
 
@@ -1179,8 +1206,7 @@ export default function App() {
           ["windows_barcode_studio_saved_templates", JSON.stringify(bundle.windows_barcode_studio_saved_templates || [])],
           ["barcode_studio_custom_presets", JSON.stringify(bundle.barcode_studio_custom_presets || [])],
           ["barcode_studio_recent_files", JSON.stringify(bundle.barcode_studio_recent_files || [])],
-          ["gmail_address", bundle.gmail_address || ""],
-          ["gmail_app_password", bundle.gmail_app_password || ""],
+          // Note: gmail_address and gmail_app_password are intentionally excluded for privacy & security
           ["gmail_trigger_subjects", JSON.stringify(bundle.gmail_trigger_subjects || [])],
           ["gmail_polling_enabled", bundle.gmail_polling_enabled || "false"],
           ["gmail_polling_interval", bundle.gmail_polling_interval || ""],
@@ -1242,8 +1268,7 @@ export default function App() {
                     ["windows_barcode_studio_saved_templates", JSON.stringify(bundle.windows_barcode_studio_saved_templates || [])],
                     ["barcode_studio_custom_presets", JSON.stringify(bundle.barcode_studio_custom_presets || [])],
                     ["barcode_studio_recent_files", JSON.stringify(bundle.barcode_studio_recent_files || [])],
-                    ["gmail_address", bundle.gmail_address || ""],
-                    ["gmail_app_password", bundle.gmail_app_password || ""],
+                    // Note: gmail_address and gmail_app_password are intentionally excluded for privacy & security
                     ["gmail_trigger_subjects", JSON.stringify(bundle.gmail_trigger_subjects || [])],
                     ["gmail_polling_enabled", bundle.gmail_polling_enabled || "false"],
                     ["gmail_polling_interval", bundle.gmail_polling_interval || ""],
@@ -2662,7 +2687,7 @@ export default function App() {
                   dbConnected={dbConnected}
                   dbName={dbName}
                   activePrinter={activePrinter}
-                  onSelectPrinter={setActivePrinter}
+                  onSelectPrinter={handleSelectPrinter}
                   onShowHelp={() => setShowHelpModal(true)}
                   onToggleTheme={() =>
                     setTheme((prev) => (prev === "dark" ? "light" : "dark"))

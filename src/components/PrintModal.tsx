@@ -5,6 +5,7 @@ import { getAutoShrunkFontSize, getAutoShrunkWrappedFontSize } from "../utils/te
 import { mockRecords } from "../data/mockData";
 import JsBarcode from "jsbarcode";
 import QRCode from "qrcode";
+import logoUrl from "@/assets/logo.png";
 
 // --- Embedded Barcode Renderer for Print Preview ---
 interface BarcodeRendererProps {
@@ -224,7 +225,6 @@ import {
   Search,
   ArrowLeft,
   ArrowRight,
-  List,
   Hash,
   Table,
   ChevronLeft,
@@ -236,8 +236,6 @@ import {
   AlertCircle,
   ChevronDown,
   Target,
-  Plus,
-  ClipboardPaste,
 } from "lucide-react";
 
 export interface AccessionRowItem {
@@ -480,14 +478,36 @@ export const PrintModal: React.FC<PrintModalProps> = ({
   // Selected templates for printing
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
 
-  // Local active printer state for temporary overrides
-  const [selectedPrinter, setSelectedPrinter] = useState<Printer | null>(activePrinter);
+  // Local active printer state for temporary overrides, initialized and synchronized with persisted default
+  const [selectedPrinter, setSelectedPrinter] = useState<Printer | null>(() => {
+    try {
+      const stored = localStorage.getItem("barcode_studio_active_printer");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.name) return parsed;
+      }
+    } catch (e) { }
+    return activePrinter;
+  });
 
   useEffect(() => {
     if (isOpen) {
-      setSelectedPrinter(activePrinter);
+      try {
+        const stored = localStorage.getItem("barcode_studio_active_printer");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed && parsed.name) {
+            const found = printers.find((p) => p.name === parsed.name);
+            setSelectedPrinter(found ? { ...found, ...parsed } : parsed);
+            return;
+          }
+        }
+      } catch (e) { }
+      if (activePrinter) {
+        setSelectedPrinter(activePrinter);
+      }
     }
-  }, [isOpen, activePrinter]);
+  }, [isOpen, activePrinter, printers]);
 
   // Paper & Layout Selection states (Derived from active template config to ensure correct layout and spacing)
   const activeTemplates = React.useMemo(() => {
@@ -499,10 +519,10 @@ export const PrintModal: React.FC<PrintModalProps> = ({
 
   const customWidthMm = primaryTemplate?.widthMm || 50;
   const customHeightMm = primaryTemplate?.heightMm || 30;
-  const leftMarginMm = primaryTemplate?.marginLeft !== undefined ? primaryTemplate.marginLeft : 2;
-  const rightMarginMm = primaryTemplate?.marginRight !== undefined ? primaryTemplate.marginRight : 2;
-  const middleGapMm = primaryTemplate?.gapHorizontal !== undefined ? primaryTemplate.gapHorizontal : 2;
-  const topMarginMm = primaryTemplate?.marginTop !== undefined ? primaryTemplate.marginTop : 3;
+  const leftMarginMm = (primaryTemplate?.marginLeft !== undefined && primaryTemplate.marginLeft > 0) ? primaryTemplate.marginLeft : (paperType === "dual" ? 2 : 0);
+  const rightMarginMm = (primaryTemplate?.marginRight !== undefined && primaryTemplate.marginRight > 0) ? primaryTemplate.marginRight : (paperType === "dual" ? 2 : 0);
+  const middleGapMm = (primaryTemplate?.gapHorizontal !== undefined && primaryTemplate.gapHorizontal > 0) ? primaryTemplate.gapHorizontal : (paperType === "dual" ? 2 : 0);
+  const topMarginMm = (primaryTemplate?.marginTop !== undefined && primaryTemplate.marginTop > 0) ? primaryTemplate.marginTop : 0;
 
   // Dynamically calculate scale factor so the preview fits perfectly on small or large viewports
   const previewScale = React.useMemo(() => {
@@ -522,6 +542,74 @@ export const PrintModal: React.FC<PrintModalProps> = ({
       setPrinting(false);
     }
   }, [isOpen, allTemplates]);
+
+  // Printing Rotation state (0°, 90°, 180°, 270°)
+  const initialRotation = React.useMemo<0 | 90 | 180 | 270>(() => {
+    const o = String(primaryTemplate?.orientation || "").toLowerCase();
+    const r = Number(primaryTemplate?.rotation) || 0;
+    if (r === 180 || o === "portrait-180" || o === "180" || o === "upside_down" || o === "reverse") return 180;
+    if (r === 90 || o === "landscape") return 90;
+    if (r === 270 || o === "landscape-180") return 270;
+    return 0;
+  }, [primaryTemplate]);
+
+  const [printRotation, setPrintRotation] = useState<0 | 90 | 180 | 270>(() => {
+    try {
+      const stored = localStorage.getItem("barcode_studio_print_rotation");
+      if (stored !== null) {
+        const parsed = parseInt(stored, 10);
+        if ([0, 90, 180, 270].includes(parsed)) return parsed as 0 | 90 | 180 | 270;
+      }
+    } catch (e) { }
+    return initialRotation;
+  });
+
+  const handleRotationChange = (deg: 0 | 90 | 180 | 270) => {
+    setPrintRotation(deg);
+    try {
+      localStorage.setItem("barcode_studio_print_rotation", String(deg));
+    } catch (e) { }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      try {
+        const stored = localStorage.getItem("barcode_studio_print_rotation");
+        if (stored !== null) {
+          const parsed = parseInt(stored, 10);
+          if ([0, 90, 180, 270].includes(parsed)) {
+            setPrintRotation(parsed as 0 | 90 | 180 | 270);
+            return;
+          }
+        }
+      } catch (e) { }
+      setPrintRotation(initialRotation);
+    }
+  }, [isOpen, initialRotation]);
+
+  // Printer dropdown state
+  const [isPrinterDropdownOpen, setIsPrinterDropdownOpen] = useState(false);
+  const printerDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (printerDropdownRef.current && !printerDropdownRef.current.contains(e.target as Node)) {
+        setIsPrinterDropdownOpen(false);
+      }
+    };
+    if (isPrinterDropdownOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isPrinterDropdownOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsPrinterDropdownOpen(false);
+    }
+  }, [isOpen]);
 
   // Helper to parse strings like "1234/a1/b2" into base "1234" and abbreviations
   const parseTermAbbreviation = (rawTerm: string) => {
@@ -817,7 +905,8 @@ export const PrintModal: React.FC<PrintModalProps> = ({
   // Preview & Print Data: Generate a record for EVERY parsed accession number.
   // If matched in DB, enrich with DB fields (Title, Author, etc.).
   // If DB hasn't loaded yet or not found, generate an immediate fallback record with AccessionNo = finalAcc
-  // so preview and printing ALWAYS reflect exactly what the user typed.
+  // Preview & Print Data: Only include valid found records or standalone records.
+  // Missing records (status === "not_found") are excluded so they cannot be printed.
   const selectedRecords = React.useMemo(() => {
     const records: DatabaseRecord[] = [];
     parsedAccessions.forEach((rawTerm) => {
@@ -826,6 +915,11 @@ export const PrintModal: React.FC<PrintModalProps> = ({
       const baseRec = (cached && cached.status === "found" && cached.record) ? cached.record : null;
       const logicalUniqueKey = activeProfile?.uniqueField || "AccessionNo";
       const lookupField = getLookupPhysicalField(activeProfile);
+
+      // If connected to a database profile and confirmed not found, do NOT add to selectedRecords
+      if (activeProfile && cached?.status === "not_found") {
+        return;
+      }
 
       abbreviations.forEach(({ suffix, count }) => {
         for (let i = 0; i < count; i++) {
@@ -839,7 +933,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
               [lookupField]: finalAcc,
             });
           } else {
-            // Immediate guaranteed fallback record using entered accession number
+            // Immediate fallback record using entered accession number (for standalone mode or in-flight query)
             records.push({
               AccessionNo: finalAcc,
               acc_no: finalAcc,
@@ -882,6 +976,32 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     return parsedAccessions.length > 0;
   }, [parsedAccessions]);
 
+  // Synchronized scroll ref for paste-all box with highlighted missing terms
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  const handleTextareaScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
+    const top = e.currentTarget.scrollTop;
+    const left = e.currentTarget.scrollLeft;
+    if (backdropRef.current) {
+      backdropRef.current.scrollTop = top;
+      backdropRef.current.scrollLeft = left;
+    }
+    if (overlayRef.current) {
+      overlayRef.current.scrollTop = top;
+    }
+  };
+
+  const handleRemoveLine = useCallback((indexToRemove: number) => {
+    const lines = accessionText.split("\n");
+    if (indexToRemove >= 0 && indexToRemove < lines.length) {
+      lines.splice(indexToRemove, 1);
+      const newText = lines.join("\n");
+      handleAccessionTextChange(newText);
+    }
+  }, [accessionText]);
+
   // Printing Loop animation states
   const [printing, setPrinting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -913,6 +1033,20 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     }
   };
 
+  useEffect(() => {
+    if (isOpen) {
+      try {
+        const stored = localStorage.getItem("barcode_studio_print_copies");
+        if (stored) {
+          const val = parseInt(stored, 10);
+          if (!isNaN(val) && val >= 1) {
+            setCopies(val);
+          }
+        }
+      } catch (e) { }
+    }
+  }, [isOpen]);
+
   // Printer Calibration States
   const [calibOffsetX, setCalibOffsetX] = useState<number>(0);
   const [calibOffsetY, setCalibOffsetY] = useState<number>(0);
@@ -920,21 +1054,11 @@ export const PrintModal: React.FC<PrintModalProps> = ({
   const [calibScaleY, setCalibScaleY] = useState<number>(1.0);
   const [calibRotation, setCalibRotation] = useState<number>(0);
 
-  // Sync printer calibration settings on printer change
+  // Sync printer calibration settings on printer change (reset to 0 to strictly match canvas design)
   useEffect(() => {
     if (!isOpen || !selectedPrinter?.name) return;
     try {
-      const stored = localStorage.getItem("barcode_studio_printer_calibrations");
-      if (stored) {
-        const calibs = JSON.parse(stored);
-        const pCalib = calibs[selectedPrinter.name] || {};
-        setCalibOffsetX(pCalib.offsetX !== undefined ? pCalib.offsetX : 0);
-        setCalibOffsetY(pCalib.offsetY !== undefined ? pCalib.offsetY : 0);
-        setCalibScaleX(pCalib.scaleX !== undefined ? pCalib.scaleX : 1.0);
-        setCalibScaleY(pCalib.scaleY !== undefined ? pCalib.scaleY : 1.0);
-        setCalibRotation(pCalib.rotation !== undefined ? pCalib.rotation : 0);
-        return;
-      }
+      localStorage.removeItem("barcode_studio_printer_calibrations");
     } catch (e) { }
     setCalibOffsetX(0);
     setCalibOffsetY(0);
@@ -1418,24 +1542,25 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         }
       }
 
-      // 3. Orientation Rotation (landscape, portrait-180, landscape-180)
-      if (t.orientation && t.orientation !== "portrait") {
+      // 3. Printing Rotation (0°, 90°, 180°, 270°)
+      const rotAngle = (t.rotation !== undefined ? t.rotation : (t.orientation === "portrait-180" ? 180 : t.orientation === "landscape" ? 90 : t.orientation === "landscape-180" ? 270 : 0)) || printRotation;
+      if (rotAngle !== 0) {
         const rotCanvas = document.createElement("canvas");
         const rCtx = rotCanvas.getContext("2d");
         if (rCtx) {
-          if (t.orientation === "portrait-180") {
+          if (rotAngle === 180) {
             rotCanvas.width = finalCanvas.width;
             rotCanvas.height = finalCanvas.height;
             rCtx.translate(finalCanvas.width, finalCanvas.height);
             rCtx.rotate(Math.PI);
             rCtx.drawImage(finalCanvas, 0, 0);
-          } else if (t.orientation === "landscape") {
+          } else if (rotAngle === 90) {
             rotCanvas.width = finalCanvas.height;
             rotCanvas.height = finalCanvas.width;
             rCtx.translate(finalCanvas.height, 0);
             rCtx.rotate(Math.PI / 2);
             rCtx.drawImage(finalCanvas, 0, 0);
-          } else if (t.orientation === "landscape-180") {
+          } else if (rotAngle === 270) {
             rotCanvas.width = finalCanvas.height;
             rotCanvas.height = finalCanvas.width;
             rCtx.translate(0, finalCanvas.width);
@@ -1536,14 +1661,21 @@ export const PrintModal: React.FC<PrintModalProps> = ({
       return;
     }
 
-    if (selectedRecords.length === 0) {
-      alert("No valid accession records were found. Nothing can be printed.");
+    // STRICT CHECK: Until all records are found, printing is blocked
+    if (missingAccessionNumbers.length > 0) {
+      alert(
+        `Cannot print: ${missingAccessionNumbers.length} accession record(s) not found in the database. Please remove or correct missing records before printing.`
+      );
       return;
     }
 
-    // If there are missing accessions, show confirmation warning dialog
-    if (missingAccessionNumbers.length > 0) {
-      setShowMissingWarning(true);
+    if (isLookingUp) {
+      alert("Database lookup is in progress. Please wait a moment for records to be verified.");
+      return;
+    }
+
+    if (selectedRecords.length === 0) {
+      alert("No valid accession records were found. Nothing can be printed.");
       return;
     }
 
@@ -1561,6 +1693,20 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     setPrintedCount(0);
     setSuccess(false);
 
+    // Persist active printer and print settings as the default rule for future prints
+    if (selectedPrinter) {
+      try {
+        localStorage.setItem("barcode_studio_active_printer", JSON.stringify(selectedPrinter));
+        onSelectPrinter?.(selectedPrinter);
+      } catch (e) { }
+    }
+    try {
+      if (typeof copies === "number" && copies >= 1) {
+        localStorage.setItem("barcode_studio_print_copies", String(copies));
+      }
+      localStorage.setItem("barcode_studio_print_rotation", String(printRotation));
+    } catch (e) { }
+
     const safeCopiesExecute = Number(copies) || 1;
     onLogMessage(
       "info",
@@ -1569,13 +1715,31 @@ export const PrintModal: React.FC<PrintModalProps> = ({
 
     const activeTemplates = allTemplates.filter((t) => selectedTemplateIds.includes(t.id));
 
+    const resolvedOrientation = printRotation === 180
+      ? "portrait-180"
+      : printRotation === 90
+      ? "landscape"
+      : printRotation === 270
+      ? "landscape-180"
+      : "portrait";
+
     // Build the print queue: group by record and copies, and interleave templates (A, B, A, B...)
     const queue: { template: LabelTemplate; record: DatabaseRecord; index: number }[] = [];
     let counter = 1;
     selectedRecords.forEach((rec) => {
       for (let c = 0; c < safeCopiesExecute; c++) {
         activeTemplates.forEach((t) => {
-          queue.push({ template: t, record: rec, index: counter++ });
+          queue.push({
+            template: {
+              ...t,
+              widthMm: customWidthMm,
+              heightMm: customHeightMm,
+              orientation: resolvedOrientation,
+              rotation: printRotation,
+            },
+            record: rec,
+            index: counter++,
+          });
         });
       }
     });
@@ -1672,7 +1836,30 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         }
       } else {
         setProgress(40);
-        const targetTemplate = activeTemplates[0] || template;
+        const primaryTmpl = activeTemplates[0] || template;
+        const resolvedColumns = paperType === "dual" ? 2 : (primaryTmpl?.columns || 1);
+        const resolvedPageW = resolvedColumns === 2
+          ? (leftMarginMm + customWidthMm * 2 + middleGapMm + rightMarginMm)
+          : (leftMarginMm + customWidthMm + rightMarginMm);
+        const resolvedPageH = customHeightMm + topMarginMm;
+
+        const targetTemplate: LabelTemplate = {
+          ...primaryTmpl,
+          columns: resolvedColumns,
+          widthMm: customWidthMm,
+          heightMm: customHeightMm,
+          marginLeft: leftMarginMm,
+          marginRight: rightMarginMm,
+          marginTop: topMarginMm,
+          marginBottom: 0,
+          gapHorizontal: middleGapMm,
+          gapVertical: primaryTmpl?.gapVertical || primaryTmpl?.gapMm || 2.0,
+          pageWidthMm: resolvedPageW,
+          pageHeightMm: resolvedPageH,
+          orientation: resolvedOrientation,
+          rotation: printRotation,
+        };
+
         const result = await electronAPI.printBatch(
           selectedPrinter?.name || '',
           queue, // Pass the unified queue of template/record pairs
@@ -1682,11 +1869,11 @@ export const PrintModal: React.FC<PrintModalProps> = ({
             quality: "auto",
             nativeMode: true,
             calibration: {
-              offsetX: calibOffsetX,
-              offsetY: calibOffsetY,
-              scaleX: calibScaleX,
-              scaleY: calibScaleY,
-              rotation: calibRotation,
+              offsetX: 0,
+              offsetY: 0,
+              scaleX: 1.0,
+              scaleY: 1.0,
+              rotation: 0,
             }
           }
         );
@@ -1923,7 +2110,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
   const safeCopies = typeof copies === "number" ? copies : 1;
   const totalLabelsToPrint = selectedRecords.length * safeCopies;
 
-  // Build sequential print queue of (template, record) pairs for visual simulation
+  // Build sequential print queue of (template, record) pairs
   const printQueue = React.useMemo(() => {
     const queue: { template: LabelTemplate; record: DatabaseRecord; index: number }[] = [];
     const activeTemplates = allTemplates.filter((t) => selectedTemplateIds.includes(t.id));
@@ -1941,15 +2128,27 @@ export const PrintModal: React.FC<PrintModalProps> = ({
 
   // For dual column layout, group queue items into rows of 2
   const printRows = React.useMemo(() => {
-    const rows: { left?: typeof printQueue[0]; right?: typeof printQueue[0] }[] = [];
+    const rows: { rowNumber: number; left?: typeof printQueue[0]; right?: typeof printQueue[0] }[] = [];
+    let r = 1;
     for (let i = 0; i < printQueue.length; i += 2) {
       rows.push({
+        rowNumber: r++,
         left: printQueue[i],
         right: printQueue[i + 1],
       });
     }
     return rows;
   }, [printQueue]);
+
+  // Print Preview: show last entered number on top (first-in-first-out 180° rotated preview order)
+  // Physical printing remains strictly in the original entered sequence.
+  const previewQueue = React.useMemo(() => {
+    return [...printQueue].reverse();
+  }, [printQueue]);
+
+  const previewRows = React.useMemo(() => {
+    return [...printRows].reverse();
+  }, [printRows]);
 
   // Render Label Preview Elements based on active record
   const renderLiveElement = (
@@ -2163,9 +2362,11 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         {/* Modal Title Header */}
         <div className={`px-6 py-4 ${isLight ? 'bg-slate-50/80 border-slate-200' : 'bg-[#121624] border-slate-800'} border-b flex items-center justify-between shrink-0`}>
           <div className="flex items-center gap-3.5">
-            <div className={`p-2.5 ${isLight ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'} rounded-xl shadow-xs`}>
-              <PrinterIcon className="w-5 h-5" />
-            </div>
+            <img
+              src={logoUrl}
+              alt="BarCode Studio Logo"
+              className="w-11 h-11 object-contain shrink-0 select-none drop-shadow-xs"
+            />
             <div>
               <h3 className={`font-black text-base ${isLight ? 'text-slate-900' : 'text-slate-100'} tracking-tight flex items-center gap-2`}>
                 Barcode Label Printer
@@ -2211,6 +2412,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                     <span className={`inline-flex items-center text-[9px] px-2 py-0.5 rounded-full font-mono font-bold whitespace-nowrap ${isLight ? 'bg-indigo-50 border border-indigo-200 text-indigo-700' : 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-300'}`}>
                       {parsedAccessions.length} {parsedAccessions.length === 1 ? 'Item' : 'Items'}
                     </span>
+
                     {accessionText.trim() && (
                       <button
                         type="button"
@@ -2226,68 +2428,143 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                   </div>
                 </div>
 
-                {/* Sleek Native Multi-Line Editor */}
-                <div className={`rounded-xl border transition-all overflow-hidden ${
+                {/* Simple Multi-Line Paste-All Box with Row Highlight & Delete Actions */}
+                <div className={`relative rounded-xl border transition-all h-44 overflow-hidden ${
                   isLight
                     ? 'border-slate-300 bg-white focus-within:border-indigo-600 focus-within:ring-2 focus-within:ring-indigo-500/15 shadow-xs'
                     : 'border-slate-700/80 bg-[#0e1220] focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 shadow-xs'
                 }`}>
+                  {/* Layer 1: Row Highlights (Starts from left corner, ends at right corner fading) */}
+                  <div
+                    ref={backdropRef}
+                    aria-hidden="true"
+                    className="absolute inset-0 overflow-hidden pointer-events-none select-none"
+                    style={{
+                      paddingTop: '10px',
+                      paddingBottom: '10px',
+                    }}
+                  >
+                    {(accessionText ? accessionText.split("\n") : []).map((line, lineIdx) => {
+                      const clean = line.trim();
+                      const { baseTerm } = parseTermAbbreviation(clean);
+                      const cached = lookupResults.get(baseTerm.toLowerCase());
+                      const isMissing = Boolean(
+                        clean &&
+                        activeProfile &&
+                        (cached?.status === "not_found" || missingAccessionNumbers.some((m) => line.includes(m)))
+                      );
+
+                      return (
+                        <div
+                          key={lineIdx}
+                          style={{ height: '24px' }}
+                          className={`w-full transition-colors flex items-center ${
+                            isMissing
+                              ? isLight
+                                ? "bg-gradient-to-r from-red-200/90 via-red-100/35 to-transparent border-l-4 border-red-500"
+                                : "bg-gradient-to-r from-red-500/35 via-red-500/15 to-transparent border-l-4 border-red-500"
+                              : "border-l-4 border-transparent"
+                          }`}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {/* Layer 2: Native Multi-Line Textarea */}
                   <textarea
+                    ref={textareaRef}
                     value={accessionText}
                     onChange={(e) => handleAccessionTextChange(e.target.value)}
-                    placeholder={"Enter or paste accession numbers...\ne.g.\n10001\n10002\n10003/c1/c2"}
+                    onScroll={handleTextareaScroll}
+                    placeholder={"Enter or paste accession numbers..."}
                     spellCheck={false}
-                    className={`w-full h-32 p-2.5 text-xs font-mono font-bold bg-transparent outline-none resize-none leading-relaxed custom-scrollbar border-0 block ${
+                    className={`relative z-10 w-full h-full text-xs font-mono font-bold bg-transparent outline-none resize-none custom-scrollbar border-0 block whitespace-pre ${
                       isLight ? 'text-slate-900 placeholder-slate-400' : 'text-slate-100 placeholder-slate-500'
                     }`}
+                    style={{
+                      lineHeight: '24px',
+                      paddingTop: '10px',
+                      paddingBottom: '10px',
+                      paddingLeft: '14px',
+                      paddingRight: '36px',
+                      boxSizing: 'border-box',
+                    }}
                   />
+
+                  {/* Layer 3: Overlay with clickable cross buttons on the right corner of missing lines */}
+                  <div
+                    ref={overlayRef}
+                    aria-hidden="true"
+                    className="absolute inset-0 overflow-hidden pointer-events-none z-20"
+                    style={{
+                      paddingTop: '10px',
+                      paddingBottom: '10px',
+                      paddingRight: '8px',
+                    }}
+                  >
+                    {(accessionText ? accessionText.split("\n") : []).map((line, lineIdx) => {
+                      const clean = line.trim();
+                      const { baseTerm } = parseTermAbbreviation(clean);
+                      const cached = lookupResults.get(baseTerm.toLowerCase());
+                      const isMissing = Boolean(
+                        clean &&
+                        activeProfile &&
+                        (cached?.status === "not_found" || missingAccessionNumbers.some((m) => line.includes(m)))
+                      );
+
+                      return (
+                        <div
+                          key={lineIdx}
+                          style={{ height: '24px' }}
+                          className="w-full flex items-center justify-end"
+                        >
+                          {isMissing && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveLine(lineIdx);
+                              }}
+                              title={`Remove ${clean}`}
+                              className="pointer-events-auto p-0.5 rounded text-red-500 hover:text-red-700 hover:bg-red-200/70 dark:text-red-400 dark:hover:text-red-200 dark:hover:bg-red-500/35 transition-all cursor-pointer shrink-0"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                {/* Status Indicator & Missing Badges */}
+                {/* Status Indicator & Missing Banner */}
                 <div className="space-y-1.5 pt-0.5">
-                  {selectedRecords.length > 0 && missingAccessionNumbers.length === 0 ? (
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className={`font-bold flex items-center gap-1.5 ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${isLight ? 'bg-emerald-600' : 'bg-emerald-400'} inline-block animate-pulse`}></span>
-                        {selectedRecords.length} records ready to print
+                  {missingAccessionNumbers.length > 0 ? (
+                    <div className={`p-2.5 rounded-xl border flex flex-col gap-1.5 ${
+                      isLight
+                        ? "bg-red-50 border-red-200 text-red-900 shadow-xs"
+                        : "bg-red-500/10 border-red-500/30 text-red-200 shadow-xs"
+                    }`}>
+                      <span className="font-bold text-xs flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-red-500" />
+                        <span>{missingAccessionNumbers.length} record(s) not found in database</span>
                       </span>
                     </div>
-                  ) : missingAccessionNumbers.length > 0 ? (
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className={`font-bold flex items-center gap-1.5 ${isLight ? 'text-amber-700' : 'text-amber-400'}`}>
-                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                          <span>{missingAccessionNumbers.length} not found in database:</span>
-                        </span>
-                        {selectedRecords.length > 0 && (
-                          <span className={`font-semibold ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
-                            {selectedRecords.length} valid
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-1 max-h-14 overflow-y-auto custom-scrollbar">
-                        {missingAccessionNumbers.map((term) => (
-                          <span
-                            key={term}
-                            className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-md border ${
-                              isLight
-                                ? 'bg-red-50 text-red-700 border-red-200'
-                                : 'bg-red-500/15 text-red-300 border-red-500/30'
-                            }`}
-                          >
-                            {term}
-                          </span>
-                        ))}
-                      </div>
+                  ) : selectedRecords.length > 0 ? (
+                    <div className="flex items-center justify-between text-[10px] px-1">
+                      <span className={`font-bold flex items-center gap-1.5 ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${isLight ? 'bg-emerald-600' : 'bg-emerald-400'} inline-block animate-pulse`}></span>
+                        <span>{selectedRecords.length} records found & ready to print</span>
+                      </span>
                     </div>
                   ) : parsedAccessions.length > 0 && selectedRecords.length === 0 && !isLookingUp ? (
-                    <div className={`text-[10px] font-semibold flex items-center gap-1.5 ${isLight ? 'text-red-600' : 'text-red-400'}`}>
+                    <div className={`text-[10px] font-semibold flex items-center gap-1.5 px-1 ${isLight ? 'text-red-600' : 'text-red-400'}`}>
                       <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                       <span>No valid records found in database</span>
                     </div>
                   ) : (
-                    <div className={`text-[10px] font-medium ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
-                      Paste from Excel, CSV, or type (one per line)
+                    <div className={`text-[10px] font-medium px-1 ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+                      Type or paste accession numbers (one per line)
                     </div>
                   )}
                 </div>
@@ -2362,38 +2639,15 @@ export const PrintModal: React.FC<PrintModalProps> = ({
               )}
 
               {/* Target Printer Dropdown Section */}
-              <div className={`${isLight ? 'bg-slate-50/70 border-slate-200' : 'bg-[#161b2d]/40 border-indigo-500/15'} border rounded-2xl p-3.5 space-y-2.5 shadow-xs`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <PrinterIcon className={`w-3.5 h-3.5 ${isLight ? 'text-indigo-600' : 'text-indigo-400'}`} />
-                    <span className={`text-[11px] font-extrabold uppercase tracking-wider font-mono ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>
-                      Target Printer
+              <div className={`${isLight ? 'bg-slate-50/70 border-slate-200' : 'bg-[#161b2d]/40 border-indigo-500/15'} border rounded-2xl p-2.5 space-y-2 shadow-xs`}>
+                <div className="flex items-center justify-between px-0.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <PrinterIcon className={`w-3.5 h-3.5 shrink-0 ${isLight ? 'text-indigo-600' : 'text-indigo-400'}`} />
+                    <span className={`text-[10.5px] font-extrabold uppercase tracking-wider font-mono truncate ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>
+                      Printer
                     </span>
                   </div>
-                </div>
-                <div className="relative">
-                  <select
-                    value={selectedPrinter?.name || ""}
-                    onChange={(e) => {
-                      const p = printers.find((x) => x.name === e.target.value);
-                      if (p) {
-                        setSelectedPrinter(p);
-                      }
-                    }}
-                    className={`w-full ${isLight ? 'bg-white border-slate-300 text-slate-900 hover:border-slate-400' : 'bg-[#161b2d] border-slate-700 text-slate-100 hover:border-slate-600'} border rounded-xl pl-3 pr-8 py-2 text-xs outline-none cursor-pointer appearance-none transition-all font-bold shadow-xs`}
-                  >
-                    {printers.map((p) => (
-                      <option key={p.name} value={p.name} className={isLight ? 'bg-white text-slate-900' : 'bg-slate-900 text-white'}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                  <div className={`absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  </div>
-                </div>
-                <div className="flex items-center justify-between gap-2 px-0.5">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <span className="relative flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
@@ -2402,6 +2656,74 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                       {selectedPrinter?.status || "Ready"} · {printerCaps?.maxDpi || 300} DPI
                     </span>
                   </div>
+                </div>
+
+                <div className="relative" ref={printerDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsPrinterDropdownOpen((prev) => !prev)}
+                    className={`w-full flex items-center justify-between gap-2 ${
+                      isLight
+                        ? 'bg-white border-slate-300 hover:border-indigo-400 hover:bg-slate-50/80 text-slate-800 shadow-xs'
+                        : 'bg-[#121624] border-slate-700/90 hover:border-indigo-500/60 hover:bg-[#161b2d] text-slate-100 shadow-xs'
+                    } ${isPrinterDropdownOpen ? (isLight ? 'border-indigo-500 ring-2 ring-indigo-500/15' : 'border-indigo-500 ring-2 ring-indigo-500/25') : ''} border rounded-xl px-2.5 py-1.5 text-xs outline-none cursor-pointer transition-all font-bold select-none`}
+                  >
+                    <span className="truncate flex-1 text-left">
+                      {selectedPrinter?.name || "Select Printer"}
+                    </span>
+                    <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${isPrinterDropdownOpen ? 'rotate-180 text-indigo-500' : isLight ? 'text-slate-400' : 'text-slate-500'}`} />
+                  </button>
+
+                  {/* Floating Custom Dropdown Menu */}
+                  {isPrinterDropdownOpen && (
+                    <div className={`absolute left-0 right-0 top-full mt-1 z-50 rounded-xl p-1 shadow-2xl border ${
+                      isLight
+                        ? 'bg-white border-slate-200/90 shadow-slate-300/60'
+                        : 'bg-[#151928] border-slate-700 shadow-black/80'
+                    } max-h-48 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-100`}>
+                      {printers.length === 0 ? (
+                        <div className="p-2.5 text-center text-xs text-slate-400 font-medium">
+                          No printers detected
+                        </div>
+                      ) : (
+                        printers.map((p) => {
+                          const isSelected = p.name === selectedPrinter?.name;
+
+                          return (
+                            <button
+                              key={p.name}
+                              type="button"
+                              onClick={() => {
+                                setSelectedPrinter(p);
+                                try {
+                                  localStorage.setItem("barcode_studio_active_printer", JSON.stringify(p));
+                                } catch (e) { }
+                                onSelectPrinter?.(p);
+                                setIsPrinterDropdownOpen(false);
+                              }}
+                              className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-left text-xs transition-all cursor-pointer ${
+                                isSelected
+                                  ? isLight
+                                    ? "bg-indigo-50 text-indigo-900 font-bold"
+                                    : "bg-indigo-500/20 text-indigo-200 font-bold"
+                                  : isLight
+                                    ? "hover:bg-slate-100 text-slate-700 font-medium"
+                                    : "hover:bg-slate-800/70 text-slate-300 font-medium"
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <PrinterIcon className={`w-3.5 h-3.5 shrink-0 ${isSelected ? (isLight ? "text-indigo-600" : "text-indigo-400") : (isLight ? "text-slate-400" : "text-slate-500")}`} />
+                                <span className="truncate">{p.name}</span>
+                              </div>
+                              {isSelected && (
+                                <Check className={`w-3.5 h-3.5 stroke-[2.5] shrink-0 ${isLight ? "text-indigo-600" : "text-indigo-400"}`} />
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2435,6 +2757,47 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                     }
                     className={`w-16 ${isLight ? 'bg-white border-slate-300 text-slate-900 focus:border-indigo-600' : 'bg-[#161b2d] border-slate-700 text-slate-100 focus:border-indigo-500'} border rounded-lg px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-indigo-500/50 font-mono font-black text-center shadow-xs`}
                   />
+                </div>
+              </div>
+
+              {/* Printing Rotation Section */}
+              <div className={`${isLight ? 'bg-slate-50/70 border-slate-200' : 'bg-[#161b2d]/40 border-indigo-500/15'} border rounded-2xl p-3.5 shadow-xs space-y-2`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className={`p-1.5 ${isLight ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'} rounded-lg`}>
+                      <RotateCw className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="flex flex-col">
+                      <span className={`text-[10.5px] font-extrabold uppercase font-mono tracking-wider ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>
+                        Printing Rotation
+                      </span>
+                      <span className={`text-[8.5px] font-mono mt-0.5 ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+                        {printRotation}° {printRotation === 0 ? "Normal" : printRotation === 90 ? "90° Clockwise" : printRotation === 180 ? "180° Inverted" : "270° Reverse"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-4 gap-1.5 pt-1">
+                  {([0, 90, 180, 270] as const).map((deg) => {
+                    const isSelected = printRotation === deg;
+                    return (
+                      <button
+                        key={deg}
+                        type="button"
+                        onClick={() => handleRotationChange(deg)}
+                        className={`py-1.5 px-2 rounded-xl text-[10.5px] font-bold font-mono transition-all border cursor-pointer text-center ${
+                          isSelected
+                            ? "bg-indigo-600 border-indigo-600 text-white shadow-xs"
+                            : isLight
+                            ? "bg-white border-slate-200 hover:bg-slate-100 text-slate-700"
+                            : "bg-[#161b2d] border-slate-700 hover:bg-slate-800 text-slate-300"
+                        }`}
+                      >
+                        {deg}°
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -2476,7 +2839,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
 
                     {paperType === "single" ? (
                       <div className="flex flex-col gap-5 items-center w-full">
-                        {printQueue.map((item, qIdx) => {
+                        {previewQueue.map((item, qIdx) => {
                           const currentTemplate = item.template;
                           const isZebra1 = selectedPrinter?.type === "Zebra Thermal Label" || selectedPrinter?.name?.toLowerCase().includes("zebra");
                           const w = customWidthMm;
@@ -2519,7 +2882,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                                     width: `${w * previewScale}px`,
                                     height: `${h * previewScale}px`,
                                     filter: currentTemplate.negative ? "invert(1)" : "none",
-                                    transform: `${currentTemplate.mirrorImage ? "scaleX(-1)" : ""} ${currentTemplate.orientation === "portrait-180" ? "rotate(180deg)" : currentTemplate.orientation === "landscape" ? "rotate(90deg)" : currentTemplate.orientation === "landscape-180" ? "rotate(270deg)" : ""}`.trim() || "none",
+                                    transform: `${currentTemplate.mirrorImage ? "scaleX(-1)" : ""} rotate(${printRotation}deg)`.trim() || "none",
                                   }}
                                 >
                                   <div className="relative w-full h-full">
@@ -2535,7 +2898,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                       </div>
                     ) : (
                       <div className="flex flex-col gap-5 items-center w-full">
-                        {printRows.map((row, rowIdx) => {
+                        {previewRows.map((row, rowIdx) => {
                           const leftTemplate = row.left?.template || allTemplates.find(t => selectedTemplateIds.includes(t.id)) || allTemplates[0];
                           const rightTemplate = row.right?.template || leftTemplate;
 
@@ -2552,7 +2915,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                           return (
                             <div key={rowIdx} className="flex flex-col items-center gap-1.5 w-full shrink-0">
                               <span className="text-[8.5px] font-mono text-slate-400 font-bold uppercase tracking-wider">
-                                Row #{rowIdx + 1}
+                                Row #{row.rowNumber}
                               </span>
 
                               <div
@@ -2572,7 +2935,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                                       width: `${wLeft * previewScale}px`,
                                       height: `${hLeft * previewScale}px`,
                                       filter: leftTemplate?.negative ? "invert(1)" : "none",
-                                      transform: `${leftTemplate?.mirrorImage ? "scaleX(-1)" : ""} ${leftTemplate?.orientation === "portrait-180" ? "rotate(180deg)" : leftTemplate?.orientation === "landscape" ? "rotate(90deg)" : leftTemplate?.orientation === "landscape-180" ? "rotate(270deg)" : ""}`.trim() || "none",
+                                      transform: `${leftTemplate?.mirrorImage ? "scaleX(-1)" : ""} rotate(${printRotation}deg)`.trim() || "none",
                                     }}
                                   >
                                     <div className="relative w-full h-full">
@@ -2605,7 +2968,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                                       width: `${wRight * previewScale}px`,
                                       height: `${hRight * previewScale}px`,
                                       filter: rightTemplate?.negative ? "invert(1)" : "none",
-                                      transform: `${rightTemplate?.mirrorImage ? "scaleX(-1)" : ""} ${rightTemplate?.orientation === "portrait-180" ? "rotate(180deg)" : rightTemplate?.orientation === "landscape" ? "rotate(90deg)" : rightTemplate?.orientation === "landscape-180" ? "rotate(270deg)" : ""}`.trim() || "none",
+                                      transform: `${rightTemplate?.mirrorImage ? "scaleX(-1)" : ""} rotate(${printRotation}deg)`.trim() || "none",
                                     }}
                                   >
                                     <div className="relative w-full h-full">
@@ -2656,16 +3019,16 @@ export const PrintModal: React.FC<PrintModalProps> = ({
           </div>
         )}
 
-        {/* MISSING ACCESSION CONFIRMATION WARNING MODAL */}
+        {/* MISSING ACCESSION STRICT WARNING MODAL */}
         {showMissingWarning && (
           <div className="fixed inset-0 bg-black/65 backdrop-blur-xs flex items-center justify-center z-[150] p-4 animate-fade-in">
             <div className={`w-full max-w-md rounded-2xl p-5 shadow-2xl border ${isLight ? 'bg-white border-slate-200 text-slate-900' : 'bg-[#151928] border-slate-700 text-slate-100'}`}>
               <div className="flex items-start gap-3.5">
-                <div className={`p-2.5 rounded-xl shrink-0 ${isLight ? 'bg-amber-50 text-amber-600 border border-amber-200' : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'}`}>
+                <div className={`p-2.5 rounded-xl shrink-0 ${isLight ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-red-500/15 text-red-400 border border-red-500/30'}`}>
                   <AlertCircle className="w-5 h-5" />
                 </div>
                 <div className="flex-1 space-y-1.5">
-                  <h4 className="font-black text-sm tracking-tight">Missing Records Notice</h4>
+                  <h4 className="font-black text-sm tracking-tight text-red-600 dark:text-red-400">Missing Records Block Printing</h4>
                   <p className={`text-xs leading-relaxed font-mono ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
                     {missingAccessionNumbers.length === 1
                       ? `1 accession number was not found: ${missingAccessionNumbers[0]}`
@@ -2673,7 +3036,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                     }
                   </p>
                   <p className={`text-xs font-semibold pt-1 ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>
-                    The found records can still be printed. Continue?
+                    Printing is strictly disabled until all missing records are removed or corrected.
                   </p>
                 </div>
               </div>
@@ -2683,17 +3046,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                   onClick={() => setShowMissingWarning(false)}
                   className={`px-4 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${isLight ? 'bg-white hover:bg-slate-100 border-slate-300 text-slate-700' : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'}`}
                 >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowMissingWarning(false);
-                    executePrintJob();
-                  }}
-                  className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition-all cursor-pointer"
-                >
-                  Continue Printing
+                  Close
                 </button>
               </div>
             </div>
@@ -2736,10 +3089,10 @@ export const PrintModal: React.FC<PrintModalProps> = ({
 
             <div className="space-y-1">
               <h4 className={`text-lg font-black tracking-tight ${isLight ? 'text-slate-900' : 'text-slate-100'}`}>
-                Labels Spooled Successfully
+                Labels Printed Successfully
               </h4>
               <p className={`text-xs max-w-xs leading-relaxed mx-auto ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
-                Spooler printed <span className={`font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>{totalLabelsToPrint} labels</span> to target spool <span className="font-bold text-indigo-600 dark:text-indigo-400">{selectedPrinter?.name || ''}</span>.
+               <span className={`font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>{totalLabelsToPrint} label(s)</span> printed by <span className="font-bold text-indigo-600 dark:text-indigo-400">{selectedPrinter?.name || ''}</span>.
               </p>
             </div>
 
@@ -2777,14 +3130,33 @@ export const PrintModal: React.FC<PrintModalProps> = ({
               >
                 Cancel
               </button>
-              <button
-                onClick={handlePrintSubmit}
-                disabled={selectedRecords.length === 0}
-                className="px-6 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold text-xs flex items-center gap-2 cursor-pointer disabled:opacity-45 shadow-lg shadow-indigo-600/25 active:scale-[0.98] transition-all"
-              >
-                <PrinterIcon className="w-4 h-4" />
-                <span>Print Labels</span>
-              </button>
+              {(() => {
+                const hasMissing = missingAccessionNumbers.length > 0;
+                const isPrintDisabled = selectedRecords.length === 0 || hasMissing || isLookingUp;
+                return (
+                  <button
+                    onClick={handlePrintSubmit}
+                    disabled={isPrintDisabled}
+                    title={
+                      hasMissing
+                        ? `Cannot print: ${missingAccessionNumbers.length} record(s) not found in database. Remove them to proceed.`
+                        : isLookingUp
+                        ? "Verifying records in database..."
+                        : selectedRecords.length === 0
+                        ? "Enter valid accession records to print"
+                        : "Print Labels"
+                    }
+                    className={`px-6 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all ${
+                      isPrintDisabled
+                        ? "bg-slate-300 dark:bg-slate-800 text-slate-500 dark:text-slate-500 cursor-not-allowed opacity-50 shadow-none"
+                        : "bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-600/25 active:scale-[0.98] cursor-pointer"
+                    }`}
+                  >
+                    <PrinterIcon className="w-4 h-4" />
+                    <span>Print Labels</span>
+                  </button>
+                );
+              })()}
             </div>
           </div>
         )}
