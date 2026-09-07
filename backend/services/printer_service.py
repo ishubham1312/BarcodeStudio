@@ -1593,12 +1593,15 @@ def render_label_image(template: Dict[str, Any], record: Optional[Dict[str, Any]
   if mirror:
     image = image.transpose(Image.FLIP_LEFT_RIGHT)
 
-  # Orientation rotation — high-quality bicubic resampling
-  if orientation == "landscape":
+  # Orientation / rotation — high-quality bicubic resampling
+  orientation_str = str(orientation or "").strip().lower()
+  template_rot = int(template.get("rotation") or 0)
+
+  if orientation_str in ("landscape", "90") or template_rot == 90:
     image = image.rotate(90,  expand=True, resample=Image.Resampling.BICUBIC)
-  elif orientation == "landscape-180":
+  elif orientation_str in ("landscape-180", "270") or template_rot == 270:
     image = image.rotate(270, expand=True, resample=Image.Resampling.BICUBIC)
-  elif orientation == "portrait-180":
+  elif orientation_str in ("portrait-180", "180", "upside_down", "reverse") or ("180" in orientation_str) or template_rot == 180:
     image = image.rotate(180, expand=True, resample=Image.Resampling.BICUBIC)
 
   return image

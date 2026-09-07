@@ -13,6 +13,11 @@ Example/
 .DS_Store
 *.log
 .env*
+*.exe
+backend/dist/
+backend/build/
+*.pyc
+__pycache__/
 
 
 

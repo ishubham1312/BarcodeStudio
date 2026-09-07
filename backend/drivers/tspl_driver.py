@@ -41,9 +41,8 @@ TSPL_MANUAL_OFFSET_X_MM = 0.0
 TSPL_MANUAL_OFFSET_Y_MM = 0.0
 
 # Manual tweaks for 180° rotated mode (portrait-180 / reverse):
-# Shifts printing slightly more to the left (closer to edge). Y is 0.0 to prevent bottom edge cropping.
-TSPL_180_OFFSET_X_MM = -1.5   # Shift left (negative mm) when rotated 180°
-TSPL_180_OFFSET_Y_MM = 0.0    # Vertical offset (0.0mm prevents bottom cropping)
+TSPL_180_OFFSET_X_MM = 0.0   # 0.0mm exact canvas match
+TSPL_180_OFFSET_Y_MM = 0.0   # 0.0mm exact canvas match
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TSPL printer detection
@@ -199,44 +198,45 @@ def build_tspl_label_header(template: Dict[str, Any], dpi: int, hw_offset_x_dots
     """
     width_mm = float(template.get("widthMm", 50))
     height_mm = float(template.get("heightMm", 30))
-    columns = int(template.get("columns") or 1)
-    margin_left = float(template.get("marginLeft", 0))
-    margin_right = float(template.get("marginRight", 0))
-    margin_top = float(template.get("marginTop", 0))
-    margin_bottom = float(template.get("marginBottom", 0))
-    gap_horizontal = float(template.get("gapHorizontal", 0))
+    columns = max(1, int(template.get("columns") or 1))
+    
+    # Use template margins with sensible dual-column roll defaults (2mm margins & 2mm middle gap)
+    margin_left = float(template.get("marginLeft") if template.get("marginLeft") is not None else (2.0 if columns == 2 else 0.0))
+    margin_right = float(template.get("marginRight") if template.get("marginRight") is not None else (2.0 if columns == 2 else 0.0))
+    margin_top = float(template.get("marginTop") or 0.0)
+    margin_bottom = float(template.get("marginBottom") or 0.0)
+    gap_horizontal = float(template.get("gapHorizontal") if template.get("gapHorizontal") is not None else (2.0 if columns == 2 else 0.0))
     orientation = str(template.get("orientation", "portrait")).lower()
     template_rot = int(template.get("rotation") or 0)
 
     # Swap visual width and height of physical sticker if printed in landscape
-    if orientation in ("landscape", "landscape-180"):
+    if orientation in ("landscape", "landscape-180") or template_rot in (90, 270):
         sticker_w = height_mm
         sticker_h = width_mm
     else:
         sticker_w = width_mm
         sticker_h = height_mm
 
+    calc_page_w = margin_left + columns * sticker_w + max(0, columns - 1) * gap_horizontal + margin_right
     page_w_mm = float(template.get("pageWidthMm") or 0)
-    if page_w_mm <= 0:
-        page_w_mm = margin_left + columns * sticker_w + (columns - 1) * gap_horizontal + margin_right
+    if page_w_mm <= 0 or (columns > 1 and page_w_mm <= sticker_w):
+        page_w_mm = calc_page_w
 
-    page_h_mm = float(template.get("pageHeightMm") or 0)
-    if page_h_mm <= 0:
-        page_h_mm = margin_top + sticker_h + margin_bottom
+    # Label height in TSPL SIZE defines the physical sticker height between gap detections
+    page_h_mm = sticker_h + margin_top + margin_bottom
 
     gap_mm = float(template.get("gapVertical") or template.get("gapMm") or 2.0)
+    if gap_mm <= 0:
+        gap_mm = 2.0
 
-    # REFERENCE compensates for the physical printer hardware left margin so that
-    # element x=0 on the canvas always maps to the physical left edge of the sticker.
-    # hw_offset_x_dots is obtained from PHYSICALOFFSETX of the printer device context.
-    reference_line = f"REFERENCE {hw_offset_x_dots},0" if hw_offset_x_dots > 0 else "REFERENCE 0,0"
-
-    is_180 = ("180" in orientation) or (orientation in ("upside_down", "reverse")) or (template_rot == 180)
-    # TSPL printers feed paper bottom-first, so the natural print direction is
-    # physically 180° relative to the canvas.  Invert the flag so that:
-    #   Canvas 0°   → DIRECTION 1   (printer compensates with hardware 180° flip)
-    #   Canvas 180° → DIRECTION 0,0 (printer feeds naturally, already upside-down)
-    direction_cmd = "DIRECTION 0,0" if is_180 else "DIRECTION 1"
+    # TSPL DIRECTION:
+    # 0,0: Normal feed direction (top to bottom), (0,0) is at top-left
+    # 1,0: Inverted 180° direction, (0,0) is at bottom-right
+    # For full-page raster BITMAP printing, orientation rotation (including 180° mode)
+    # is baked directly into the rendered bitmap via PIL sub-pixel bicubic resampling.
+    # Therefore DIRECTION must remain 0,0 so hardware origin stays at top-left (0,0)
+    # and feed direction matches standard roll progression without coordinate flipping.
+    direction_cmd = "DIRECTION 0,0"
     reference_line = "REFERENCE 0,0"
 
     lines = [
@@ -847,6 +847,44 @@ def _detect_printer_dpi(printer_name: str) -> int:
     return 203
 
 
+def _get_tspl_render_orientation_and_rotation(requested_orient: str, requested_rot: int) -> tuple:
+    """
+    Computes the effective PIL render orientation and rotation angle for TSPL.
+    
+    TSC thermal printers physically feed paper bottom-first under DIRECTION 0,0,
+    meaning an unrotated (0°) bitmap prints 180° rotated on the exiting label,
+    while a 180° rotated bitmap prints 0° (upright).
+    
+    To ensure TSPL orientation matches ZPL and the print preview:
+      physical_angle = (pil_angle + 180) % 360
+      pil_angle      = (target_angle + 180) % 360
+    """
+    o = str(requested_orient or "").strip().lower()
+    r = int(requested_rot or 0) % 360
+    
+    if r in (90, 180, 270):
+        target_angle = r
+    elif o in ("landscape", "90"):
+        target_angle = 90
+    elif o in ("portrait-180", "180", "upside_down", "reverse") or ("180" in o):
+        target_angle = 180
+    elif o in ("landscape-180", "270"):
+        target_angle = 270
+    else:
+        target_angle = 0
+
+    # Invert by 180° to compensate for TSC physical feed direction
+    tspl_render_angle = (target_angle + 180) % 360
+
+    if tspl_render_angle == 180:
+        return "portrait-180", 180
+    elif tspl_render_angle == 90:
+        return "landscape", 90
+    elif tspl_render_angle == 270:
+        return "landscape-180", 270
+    else:
+        return "portrait", 0
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TSPLDriver Class
 # ─────────────────────────────────────────────────────────────────────────────
@@ -917,36 +955,36 @@ class TSPLDriver(PrinterDriverInterface):
                 for _ in range(copies):
                     flat_records.append({"template": template, "record": rec})
 
+        job_template = dict(template or {})
         first_template = flat_records[0]["template"] if len(flat_records) > 0 else template
-        columns = int(first_template.get("columns") or 1)
+        columns = max(1, int(job_template.get("columns") or first_template.get("columns") or 1))
         
         # Dimensions and Margins
-        width_mm = float(first_template.get("widthMm", 50))
-        height_mm = float(first_template.get("heightMm", 30))
-        margin_left_mm = float(first_template.get("marginLeft", 0))
-        margin_right_mm = float(first_template.get("marginRight", 0))
-        margin_top_mm = float(first_template.get("marginTop", 0))
-        margin_bottom_mm = float(first_template.get("marginBottom", 0))
-        gap_horizontal_mm = float(first_template.get("gapHorizontal", 0))
-        orientation_raw = str(first_template.get("orientation", "portrait")).lower()
-        template_rot = int(first_template.get("rotation") or 0)
+        width_mm = float(job_template.get("widthMm") or first_template.get("widthMm") or 50)
+        height_mm = float(job_template.get("heightMm") or first_template.get("heightMm") or 30)
+        margin_left_mm = float(job_template.get("marginLeft") if job_template.get("marginLeft") is not None else (first_template.get("marginLeft") if first_template.get("marginLeft") is not None else (2.0 if columns == 2 else 0.0)))
+        margin_right_mm = float(job_template.get("marginRight") if job_template.get("marginRight") is not None else (first_template.get("marginRight") if first_template.get("marginRight") is not None else (2.0 if columns == 2 else 0.0)))
+        margin_top_mm = float(job_template.get("marginTop") if job_template.get("marginTop") is not None else (first_template.get("marginTop") or 0.0))
+        margin_bottom_mm = float(job_template.get("marginBottom") if job_template.get("marginBottom") is not None else (first_template.get("marginBottom") or 0.0))
+        gap_horizontal_mm = float(job_template.get("gapHorizontal") if job_template.get("gapHorizontal") is not None else (first_template.get("gapHorizontal") if first_template.get("gapHorizontal") is not None else (2.0 if columns == 2 else 0.0)))
+        orientation_raw = str(job_template.get("orientation") or first_template.get("orientation") or "portrait").lower()
+        template_rot = int(job_template.get("rotation") or first_template.get("rotation") or 0)
         is_180 = ("180" in orientation_raw) or (orientation_raw in ("upside_down", "reverse")) or (template_rot == 180)
 
         # Swap visual width and height of physical sticker if printed in landscape
-        if orientation_raw in ("landscape", "landscape-180"):
+        if orientation_raw in ("landscape", "landscape-180") or template_rot in (90, 270):
             sticker_w = height_mm
             sticker_h = width_mm
         else:
             sticker_w = width_mm
             sticker_h = height_mm
 
-        page_w_mm = float(first_template.get("pageWidthMm") or 0)
-        if page_w_mm <= 0:
-            page_w_mm = margin_left_mm + columns * sticker_w + (columns - 1) * gap_horizontal_mm + margin_right_mm
+        calc_page_w = margin_left_mm + columns * sticker_w + max(0, columns - 1) * gap_horizontal_mm + margin_right_mm
+        page_w_mm = float(job_template.get("pageWidthMm") or first_template.get("pageWidthMm") or 0)
+        if page_w_mm <= 0 or (columns > 1 and page_w_mm <= sticker_w):
+            page_w_mm = calc_page_w
 
-        page_h_mm = float(first_template.get("pageHeightMm") or 0)
-        if page_h_mm <= 0:
-            page_h_mm = margin_top_mm + sticker_h + margin_bottom_mm
+        page_h_mm = sticker_h + margin_top_mm + margin_bottom_mm
 
         # Detect physical hardware left margin (dots) from Windows printer DC.
         # TSPL REFERENCE command shifts the coordinate origin so that dot (0,0)
@@ -979,7 +1017,7 @@ class TSPLDriver(PrinterDriverInterface):
                         return True
             return False
 
-        has_bitmaps = _has_bitmaps_in_template(first_template)
+        has_bitmaps = _has_bitmaps_in_template(job_template) or _has_bitmaps_in_template(first_template)
 
         # Extract calibration parameters
         calibration = kwargs.get("calibration") or {}
@@ -1012,7 +1050,7 @@ class TSPLDriver(PrinterDriverInterface):
             block_bytes = bytearray()
             
             # Header commands - always assume has_bitmaps=True since we send a consolidated bitmap
-            header_lines = build_tspl_label_header(first_template, dpi, hw_offset_x_dots, has_bitmaps=True)
+            header_lines = build_tspl_label_header(job_template if job_template else first_template, dpi, hw_offset_x_dots, has_bitmaps=True)
             for line in header_lines:
                 block_bytes.extend(line.encode('ascii') + b"\r\n")
             
@@ -1033,20 +1071,23 @@ class TSPLDriver(PrinterDriverInterface):
                     curr_template = item["template"]
                     curr_record = item["record"]
                     
-                    col_sticker_w = height_mm if orientation_raw in ("landscape", "landscape-180") else width_mm
-                    col_sticker_h = width_mm if orientation_raw in ("landscape", "landscape-180") else height_mm
-                    
-                    # Normalize orientation for single label rendering.
-                    # render_label_image applies orientation rotation internally, so
-                    # for 180 rotations we strip the "-180" suffix so the render produces
-                    # an upright sticker which we then rotate as a whole-page operation below.
-                    tmpl_for_render = dict(curr_template)
-                    if orientation_raw == "portrait-180":
-                        tmpl_for_render["orientation"] = "portrait"
-                    elif orientation_raw == "landscape-180":
-                        tmpl_for_render["orientation"] = "landscape"
+                    curr_orient = str(curr_template.get("orientation") or orientation_raw).lower()
+                    curr_rot = int(curr_template.get("rotation") if curr_template.get("rotation") is not None else template_rot)
+                    curr_is_landscape = curr_orient in ("landscape", "landscape-180") or curr_rot in (90, 270)
 
-                    # Render single label at native printer DPI
+                    col_sticker_w = height_mm if curr_is_landscape else width_mm
+                    col_sticker_h = width_mm if curr_is_landscape else height_mm
+                    
+                    # Compute compensated orientation for TSPL thermal printhead
+                    render_orient, render_rot = _get_tspl_render_orientation_and_rotation(curr_orient, curr_rot)
+
+                    tmpl_for_render = dict(curr_template)
+                    tmpl_for_render["widthMm"] = width_mm
+                    tmpl_for_render["heightMm"] = height_mm
+                    tmpl_for_render["orientation"] = render_orient
+                    tmpl_for_render["rotation"] = render_rot
+
+                    # Render single label at native printer DPI (render_label_image applies orientation rotation internally)
                     lbl_img = render_label_image(tmpl_for_render, curr_record, dpi)
                     
                     # Paste position: margin + column offset + total offset (page-relative coordinates)
@@ -1081,26 +1122,29 @@ class TSPLDriver(PrinterDriverInterface):
             tspl_blocks_bytes.append(bytes(block_bytes))
 
         # ── Diagnostic dump ─────────────────────────────────────────────
-        # Save the first generated TSPL block to a debug file so the output
-        # can be inspected without connecting a printer.
-        try:
-            debug_path = Path(__file__).parent.parent.parent / "tspl_debug.txt"
-            with open(debug_path, "wb") as dbg:
-                dbg.write(f"# TSPL Diagnostic Dump (BINARY)\n".encode('ascii'))
-                dbg.write(f"# Printer: {printer_name}\n".encode('ascii'))
-                dbg.write(f"# DPI: {dpi}\n".encode('ascii'))
-                dbg.write(f"# Template widthMm={width_mm} heightMm={height_mm} columns={columns}\n".encode('ascii'))
-                dbg.write(f"# margin_left={margin_left_mm} margin_top={margin_top_mm} gap_h={gap_horizontal_mm}\n".encode('ascii'))
-                dbg.write(f"# hw_offset_x_dots={hw_offset_x_dots}\n".encode('ascii'))
-                dbg.write(f"# Elements count: {len(first_template.get('elements', []))}\n".encode('ascii'))
-                dbg.write(f"# has_bitmaps: {has_bitmaps}\n\n".encode('ascii'))
-                for i, block_bytes in enumerate(tspl_blocks_bytes[:3]):  # First 3 blocks only
-                    dbg.write(f"=== BLOCK {i} ({len(block_bytes)} bytes) ===\n".encode('ascii'))
-                    dbg.write(block_bytes)
-                    dbg.write(b"\n\n")
-            logger.info(f"[TSPL] Debug dump written to: {debug_path}")
-        except Exception as _dbg_ex:
-            logger.debug(f"[TSPL] Could not write debug dump: {_dbg_ex}")
+        # Only dump binary debug blocks when TSPL_DEBUG environment variable is enabled,
+        # and always write to the OS temporary folder so it never pollutes the project root
+        # or triggers file watchers / app reloads in dev mode.
+        if os.environ.get("TSPL_DEBUG") == "1":
+            try:
+                import tempfile
+                debug_path = Path(tempfile.gettempdir()) / "tspl_debug.txt"
+                with open(debug_path, "wb") as dbg:
+                    dbg.write(f"# TSPL Diagnostic Dump (BINARY)\n".encode('ascii'))
+                    dbg.write(f"# Printer: {printer_name}\n".encode('ascii'))
+                    dbg.write(f"# DPI: {dpi}\n".encode('ascii'))
+                    dbg.write(f"# Template widthMm={width_mm} heightMm={height_mm} columns={columns}\n".encode('ascii'))
+                    dbg.write(f"# margin_left={margin_left_mm} margin_top={margin_top_mm} gap_h={gap_horizontal_mm}\n".encode('ascii'))
+                    dbg.write(f"# hw_offset_x_dots={hw_offset_x_dots}\n".encode('ascii'))
+                    dbg.write(f"# Elements count: {len(first_template.get('elements', []))}\n".encode('ascii'))
+                    dbg.write(f"# has_bitmaps: {has_bitmaps}\n\n".encode('ascii'))
+                    for i, block_bytes in enumerate(tspl_blocks_bytes[:3]):  # First 3 blocks only
+                        dbg.write(f"=== BLOCK {i} ({len(block_bytes)} bytes) ===\n".encode('ascii'))
+                        dbg.write(block_bytes)
+                        dbg.write(b"\n\n")
+                logger.info(f"[TSPL] Debug dump written to: {debug_path}")
+            except Exception as _dbg_ex:
+                logger.debug(f"[TSPL] Could not write debug dump: {_dbg_ex}")
         # ────────────────────────────────────────────────────────────────
 
         # Execute jobs

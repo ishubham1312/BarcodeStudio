@@ -1,8 +1,0 @@
-=== TSPL vs ZPL PARITY AUDIT REPORT ===
-Printer: KORES ENDURA 2801 - TSPL
-DPI Calibration: 203 (dots_per_mm=7.9921)
-ZPL Page Width: 812 dots | TSPL Canvas Width: 812 dots (Variance: 0px)
-ZPL Page Height: 365 dots | TSPL Canvas Height: 365 dots (Variance: 0px)
-Reference Origin: REFERENCE 0,0 (ZPL ^LH0,0 Parity: EXACT)
-Rotation Mode: DIRECTION 1 + Pillow 180
-STATUS: 0px VARIANCE - PARITY CALIBRATED

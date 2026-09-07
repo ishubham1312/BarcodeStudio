@@ -36,6 +36,9 @@ function build() {
     const exePath = path.join(backendDir, 'dist', 'studio_backend.exe');
     if (fs.existsSync(exePath)) {
       console.log(`[Build Python] Successfully compiled studio_backend.exe at: ${exePath}`);
+      fs.copyFileSync(exePath, path.join(backendDir, 'services.exe'));
+      fs.copyFileSync(exePath, path.join(backendDir, 'studio_backend.exe'));
+      console.log('[Build Python] Synced to backend/services.exe and backend/studio_backend.exe');
     } else {
       throw new Error(`Executable not found at ${exePath} after compilation`);
     }

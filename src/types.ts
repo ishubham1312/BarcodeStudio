@@ -61,6 +61,7 @@ export interface LabelTemplate {
   lastModified: string;
   shape?: 'rectangle' | 'rounded-rectangle' | 'ellipse' | 'circle';
   orientation?: 'portrait' | 'landscape' | 'portrait-180' | 'landscape-180';
+  rotation?: number;
   mirrorImage?: boolean;
   negative?: boolean;
   paddingLeftMm?: number;
