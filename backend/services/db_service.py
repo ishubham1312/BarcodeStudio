@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import pymysql
+import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from services.logging_service import get_logger
@@ -13,6 +14,9 @@ try:
 except ImportError:
   pyodbc = None
   logger.warning("pyodbc not installed. MS SQL Server connections will be unavailable unless installed.")
+
+_thread_local = threading.local()
+_columns_cache: Dict[str, List[str]] = {}
 
 def resolve_sqlite_path(sqlite_path: str) -> str:
   """Resolve relative SQLite paths against user writable directory."""
@@ -439,6 +443,95 @@ def get_preview_rows(config: Dict[str, Any], table_name: str, limit: int = 100) 
     
   return []
 
+def get_cached_mssql_conn(config: Dict[str, Any]):
+  conn_str = get_mssql_conn_string(config)
+  conn = getattr(_thread_local, "mssql_conn", None)
+  cached_str = getattr(_thread_local, "mssql_conn_str", None)
+
+  if conn is not None and cached_str == conn_str:
+    try:
+      cur = conn.cursor()
+      cur.execute("SELECT 1")
+      cur.fetchone()
+      cur.close()
+      return conn
+    except Exception:
+      try:
+        conn.close()
+      except Exception:
+        pass
+      _thread_local.mssql_conn = None
+
+  conn = pyodbc.connect(conn_str, timeout=3)
+  try:
+    conn.autocommit = True
+  except Exception:
+    pass
+  _thread_local.mssql_conn = conn
+  _thread_local.mssql_conn_str = conn_str
+  return conn
+
+def get_cached_mysql_conn(config: Dict[str, Any]):
+  database = config.get("database")
+  conn_key = (
+    config.get("server", "localhost"),
+    int(config.get("port", 3306)),
+    config.get("username", ""),
+    config.get("password", ""),
+    database
+  )
+  conn = getattr(_thread_local, "mysql_conn", None)
+  cached_key = getattr(_thread_local, "mysql_conn_key", None)
+
+  if conn is not None and cached_key == conn_key:
+    try:
+      conn.ping(reconnect=True)
+      return conn
+    except Exception:
+      try:
+        conn.close()
+      except Exception:
+        pass
+      _thread_local.mysql_conn = None
+
+  conn = pymysql.connect(
+    host=config.get("server", "localhost"),
+    port=int(config.get("port", 3306)),
+    user=config.get("username", ""),
+    password=config.get("password", ""),
+    database=database,
+    cursorclass=pymysql.cursors.DictCursor,
+    connect_timeout=3,
+    autocommit=True
+  )
+  _thread_local.mysql_conn = conn
+  _thread_local.mysql_conn_key = conn_key
+  return conn
+
+def get_cached_sqlite_conn(sqlite_path: str):
+  resolved_path = resolve_sqlite_path(sqlite_path)
+  conn = getattr(_thread_local, "sqlite_conn", None)
+  cached_path = getattr(_thread_local, "sqlite_conn_path", None)
+
+  if conn is not None and cached_path == resolved_path:
+    try:
+      cur = conn.cursor()
+      cur.execute("SELECT 1")
+      cur.close()
+      return conn
+    except Exception:
+      try:
+        conn.close()
+      except Exception:
+        pass
+      _thread_local.sqlite_conn = None
+
+  conn = sqlite3.connect(resolved_path)
+  conn.row_factory = sqlite3.Row
+  _thread_local.sqlite_conn = conn
+  _thread_local.sqlite_conn_path = resolved_path
+  return conn
+
 def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_field: str, value: str) -> Optional[Dict[str, Any]]:
   db_type = config.get("dbType")
   database = config.get("database")
@@ -446,103 +539,126 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
   if not val_clean or not table_name:
     return None
 
-  ACCESSION_HINTS = [
+  ACCESSION_HINTS = (
     "acc_no", "accno", "accession", "accessionno", "accession_no",
     "accession_number", "accessionnumber", "barcode", "id"
-  ]
+  )
 
   if db_type == "sqlite":
     sqlite_path = config.get("sqlitePath")
-    conn = get_sqlite_conn(sqlite_path)
+    try:
+      conn = get_cached_sqlite_conn(sqlite_path)
+    except Exception as e:
+      logger.error(f"SQLite connection error: {e}")
+      return None
+
     cursor = conn.cursor()
     safe_table = "".join(c for c in table_name if c.isalnum() or c in '_')
     safe_field = "".join(c for c in unique_field if c.isalnum() or c in '_') if unique_field else ""
 
-    # Get actual columns in table
-    try:
-      cursor.execute(f'PRAGMA table_info("{safe_table}")')
-      actual_cols = [row[1] for row in cursor.fetchall()]
-    except Exception:
-      actual_cols = []
-
-    fields_to_try = []
+    # 1. Direct indexed match on unique_field
     if safe_field:
-      fields_to_try.append(safe_field)
-    for col in actual_cols:
-      if col not in fields_to_try and any(col.lower() == h for h in ACCESSION_HINTS):
-        fields_to_try.append(col)
-
-    row = None
-    for fld in fields_to_try:
-      # 1. Direct indexed match
       try:
-        cursor.execute(f'SELECT * FROM "{safe_table}" WHERE "{fld}" = ? LIMIT 1', (val_clean,))
+        cursor.execute(f'SELECT * FROM "{safe_table}" WHERE "{safe_field}" = ? LIMIT 1', (val_clean,))
         row = cursor.fetchone()
-        if row:
-          break
-        # 2. Trimmed text match
-        cursor.execute(f'SELECT * FROM "{safe_table}" WHERE TRIM(CAST("{fld}" AS TEXT)) = ? LIMIT 1', (val_clean,))
-        row = cursor.fetchone()
-        if row:
-          break
+        cursor.close()
+        return dict(row) if row else None
+      except sqlite3.OperationalError:
+        pass
       except Exception:
-        continue
+        pass
 
-    res = dict(row) if row else None
-    conn.close()
-    return res
+    # 2. Fallback check only if safe_field did not exist in table
+    cache_key = f"sqlite:{sqlite_path}:{safe_table}"
+    actual_cols = _columns_cache.get(cache_key)
+    if not actual_cols:
+      try:
+        cursor.execute(f'PRAGMA table_info("{safe_table}")')
+        actual_cols = [r[1] for r in cursor.fetchall()]
+        _columns_cache[cache_key] = actual_cols
+      except Exception:
+        actual_cols = []
+
+    matched_col = None
+    for col in actual_cols:
+      if col.lower() in ACCESSION_HINTS:
+        matched_col = col
+        break
+
+    if matched_col:
+      try:
+        cursor.execute(f'SELECT * FROM "{safe_table}" WHERE "{matched_col}" = ? LIMIT 1', (val_clean,))
+        row = cursor.fetchone()
+        cursor.close()
+        return dict(row) if row else None
+      except Exception:
+        pass
+
+    cursor.close()
+    return None
 
   elif db_type == "mysql":
-    conn = pymysql.connect(
-      host=config.get("server", "localhost"),
-      port=int(config.get("port", 3306)),
-      user=config.get("username", ""),
-      password=config.get("password", ""),
-      database=database,
-      cursorclass=pymysql.cursors.DictCursor,
-      connect_timeout=3
-    )
+    try:
+      conn = get_cached_mysql_conn(config)
+    except Exception as e:
+      logger.error(f"MySQL connection error: {e}")
+      return None
+
     cursor = conn.cursor()
     safe_table = f"`{table_name}`"
 
-    fields_to_try = []
+    # 1. Direct indexed match on unique_field
     if unique_field:
-      fields_to_try.append(unique_field)
-
-    try:
-      cursor.execute(f"SHOW COLUMNS FROM {safe_table}")
-      actual_cols = [r['Field'] for r in cursor.fetchall()]
-      for col in actual_cols:
-        if col not in fields_to_try and any(col.lower() == h for h in ACCESSION_HINTS):
-          fields_to_try.append(col)
-    except Exception:
-      pass
-
-    row = None
-    for fld in fields_to_try:
-      safe_fld = f"`{fld}`"
+      safe_fld = f"`{unique_field}`"
       try:
-        # Fast indexed match
         cursor.execute(f"SELECT * FROM {safe_table} WHERE {safe_fld} = %s LIMIT 1", (val_clean,))
         row = cursor.fetchone()
-        if row:
-          break
-        # Fast trimmed match
-        cursor.execute(f"SELECT * FROM {safe_table} WHERE TRIM(CAST({safe_fld} AS CHAR)) = %s LIMIT 1", (val_clean,))
-        row = cursor.fetchone()
-        if row:
-          break
+        cursor.close()
+        return row
+      except pymysql.err.OperationalError:
+        pass
       except Exception:
-        continue
+        pass
 
-    conn.close()
-    return row
+    # 2. Fallback check only if unique_field was invalid or not in table
+    cache_key = f"mysql:{database}:{table_name}"
+    actual_cols = _columns_cache.get(cache_key)
+    if not actual_cols:
+      try:
+        cursor.execute(f"SHOW COLUMNS FROM {safe_table}")
+        actual_cols = [r['Field'] for r in cursor.fetchall()]
+        _columns_cache[cache_key] = actual_cols
+      except Exception:
+        actual_cols = []
+
+    matched_col = None
+    for col in actual_cols:
+      if col.lower() in ACCESSION_HINTS:
+        matched_col = col
+        break
+
+    if matched_col:
+      try:
+        cursor.execute(f"SELECT * FROM {safe_table} WHERE `{matched_col}` = %s LIMIT 1", (val_clean,))
+        row = cursor.fetchone()
+        cursor.close()
+        return row
+      except Exception:
+        pass
+
+    cursor.close()
+    return None
 
   elif db_type == "mssql":
     if not pyodbc:
       return None
-    conn_str = get_mssql_conn_string(config)
-    conn = pyodbc.connect(conn_str, timeout=3)
+
+    try:
+      conn = get_cached_mssql_conn(config)
+    except Exception as e:
+      logger.error(f"MSSQL connection error: {e}")
+      return None
+
     cursor = conn.cursor()
 
     if '[' in table_name or '.' in table_name:
@@ -552,7 +668,7 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
 
     val_clean = str(value).strip()
 
-    # Fast Path 1: Immediate direct indexed query on unique_field
+    # 1. Direct indexed query on unique_field
     if unique_field:
       safe_field = unique_field.replace("[", "").replace("]", "")
       try:
@@ -561,57 +677,155 @@ def get_record_by_unique_field(config: Dict[str, Any], table_name: str, unique_f
         if row:
           columns = [col[0] for col in cursor.description]
           res = {columns[idx]: ("" if val is None else str(val)) for idx, val in enumerate(row)}
-          conn.close()
+          cursor.close()
+          return res
+        else:
+          # Indexed column checked and 0 rows found -> Record does not exist!
+          cursor.close()
+          return None
+      except (pyodbc.ProgrammingError, pyodbc.Error) as err:
+        err_str = str(err)
+        # Fall through to fallback column search only if column name is invalid (Error 207)
+        if "207" not in err_str and "Invalid column" not in err_str:
+          cursor.close()
+          return None
+
+    # 2. Fallback only if unique_field was not provided or had invalid column name
+    cache_key = f"mssql:{database}:{table_name}"
+    actual_columns = _columns_cache.get(cache_key)
+    if not actual_columns:
+      try:
+        cursor.execute(f"SELECT TOP 1 * FROM {clean_table}")
+        if cursor.description:
+          actual_columns = [col[0] for col in cursor.description]
+          _columns_cache[cache_key] = actual_columns
+      except Exception:
+        actual_columns = []
+
+    matched_col = None
+    if actual_columns:
+      for col in actual_columns:
+        if col.lower() in ACCESSION_HINTS:
+          matched_col = col
+          break
+
+    if matched_col:
+      try:
+        cursor.execute(f"SELECT TOP 1 * FROM {clean_table} WHERE [{matched_col}] = ?", (val_clean,))
+        row = cursor.fetchone()
+        if row:
+          columns = [col[0] for col in cursor.description]
+          res = {columns[idx]: ("" if val is None else str(val)) for idx, val in enumerate(row)}
+          cursor.close()
           return res
       except Exception:
         pass
 
-    # Discover candidate columns if unique_field didn't find direct hit
-    actual_columns: List[str] = []
-    try:
-      cursor.execute(f"SELECT TOP 1 * FROM {clean_table}")
-      if cursor.description:
-        actual_columns = [col[0] for col in cursor.description]
-    except Exception:
-      actual_columns = []
-
-    fields_to_try: List[str] = []
-    if unique_field and unique_field not in fields_to_try:
-      fields_to_try.append(unique_field.replace("[", "").replace("]", ""))
-
-    for col in actual_columns:
-      c_lower = col.lower()
-      if col not in fields_to_try and any(c_lower == hint for hint in ACCESSION_HINTS):
-        fields_to_try.append(col)
-
-    row = None
-    for fld in fields_to_try:
-      try:
-        # Fast indexed match
-        cursor.execute(f"SELECT TOP 1 * FROM {clean_table} WHERE [{fld}] = ?", (val_clean,))
-        row = cursor.fetchone()
-        if row:
-          break
-        # Fast trimmed match
-        cursor.execute(f"SELECT TOP 1 * FROM {clean_table} WHERE LTRIM(RTRIM(CAST([{fld}] AS NVARCHAR(100)))) = ?", (val_clean,))
-        row = cursor.fetchone()
-        if row:
-          break
-      except Exception:
-        continue
-
-    res = None
-    if row:
-      columns = [col[0] for col in cursor.description]
-      res = {}
-      for idx, val in enumerate(row):
-        res[columns[idx]] = "" if val is None else str(val)
-
-    try:
-      conn.close()
-    except Exception:
-      pass
-
-    return res
+    cursor.close()
+    return None
 
   return None
+
+def get_records_by_unique_field_batch(
+  config: Dict[str, Any],
+  table_name: str,
+  unique_field: str,
+  values: List[str]
+) -> Dict[str, Optional[Dict[str, Any]]]:
+  """
+  High-performance multithreaded and chunked batch lookup for multiple accession numbers at once.
+  Returns { clean_value: record_dict_or_none }.
+  """
+  from concurrent.futures import ThreadPoolExecutor, as_completed
+
+  clean_values = [str(v).strip() for v in values if v is not None and str(v).strip()]
+  if not clean_values or not table_name:
+    return {}
+
+  # Map lowercase term -> original/cleaned term
+  term_map = {v.lower(): v for v in clean_values}
+  results: Dict[str, Optional[Dict[str, Any]]] = {term: None for term in term_map.keys()}
+
+  db_type = config.get("dbType")
+  safe_field = "".join(c for c in unique_field if c.isalnum() or c in '_') if unique_field else ""
+
+  # 1. Fast Batch Query using SQL IN (...) in chunks of 200
+  chunk_size = 200
+  distinct_values = list(set(term_map.values()))
+
+  try:
+    if db_type == "sqlite" and safe_field:
+      sqlite_path = config.get("sqlitePath")
+      conn = get_cached_sqlite_conn(sqlite_path)
+      cursor = conn.cursor()
+      safe_table = "".join(c for c in table_name if c.isalnum() or c in '_')
+
+      for i in range(0, len(distinct_values), chunk_size):
+        chunk = distinct_values[i:i + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        cursor.execute(f'SELECT * FROM "{safe_table}" WHERE "{safe_field}" IN ({placeholders})', chunk)
+        rows = cursor.fetchall()
+        for r in rows:
+          d = dict(r)
+          for k, v in d.items():
+            if k.lower() == safe_field.lower() and v is not None:
+              results[str(v).strip().lower()] = d
+      cursor.close()
+
+    elif db_type == "mysql" and safe_field:
+      conn = get_cached_mysql_conn(config)
+      cursor = conn.cursor()
+      safe_table = f"`{table_name}`"
+
+      for i in range(0, len(distinct_values), chunk_size):
+        chunk = distinct_values[i:i + chunk_size]
+        placeholders = ",".join("%s" for _ in chunk)
+        cursor.execute(f"SELECT * FROM {safe_table} WHERE `{safe_field}` IN ({placeholders})", chunk)
+        rows = cursor.fetchall()
+        for r in rows:
+          d = dict(r)
+          for k, v in d.items():
+            if k.lower() == safe_field.lower() and v is not None:
+              results[str(v).strip().lower()] = d
+      cursor.close()
+
+    elif db_type == "mssql" and safe_field and pyodbc:
+      conn = get_cached_mssql_conn(config)
+      cursor = conn.cursor()
+      clean_table = f"[{table_name}]" if not ('[' in table_name or '.' in table_name) else "".join(c for c in table_name if c.isalnum() or c in '_.[]')
+
+      for i in range(0, len(distinct_values), chunk_size):
+        chunk = distinct_values[i:i + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        cursor.execute(f"SELECT * FROM {clean_table} WHERE [{safe_field}] IN ({placeholders})", chunk)
+        columns = [col[0] for col in cursor.description]
+        rows = cursor.fetchall()
+        for r in rows:
+          d = {columns[idx]: ("" if val is None else str(val)) for idx, val in enumerate(r)}
+          for k, v in d.items():
+            if k.lower() == safe_field.lower() and v is not None:
+              results[str(v).strip().lower()] = d
+      cursor.close()
+
+  except Exception as batch_err:
+    logger.warning(f"Fast batch IN query notice: {batch_err}")
+
+  # 2. Multithreaded fallback pool for any terms still missing
+  missing_terms = [term_map[t_lower] for t_lower, rec in results.items() if rec is None]
+  if missing_terms:
+    max_workers = min(16, len(missing_terms))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+      future_to_term = {
+        executor.submit(get_record_by_unique_field, config, table_name, unique_field, term): term
+        for term in missing_terms
+      }
+      for future in as_completed(future_to_term):
+        term = future_to_term[future]
+        try:
+          rec = future.result()
+          if rec:
+            results[term.lower()] = rec
+        except Exception:
+          pass
+
+  return results

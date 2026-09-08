@@ -99,6 +99,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow) {
     catch (err: any) { return { success: false, message: err.message }; }
   });
 
+  ipcMain.handle('db-query-records-batch', async (_, config, table, uniqueField, values) => {
+    try { return await httpRequest('POST', getBackendUrl('/api/db/query-records-batch'), { config, table, uniqueField, values }); }
+    catch (err: any) { return { success: false, message: err.message }; }
+  });
+
   // Printer operations (routed to Python Flask backend)
   ipcMain.handle('get-printers', async () => {
     try { return await httpRequest('GET', getBackendUrl('/api/printers/list')); }

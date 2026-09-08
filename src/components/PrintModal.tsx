@@ -793,48 +793,119 @@ export const PrintModal: React.FC<PrintModalProps> = ({
         const lookupField = getLookupPhysicalField(activeProfile);
 
         try {
-          await Promise.all(
-            uncachedTerms.map(async (baseTerm) => {
-              const cleanTerm = baseTerm.toLowerCase();
-              try {
-                const data = await electronAPI.dbQueryRecord(activeProfile, targetTable, lookupField, baseTerm);
-                if (version !== lookupVersionRef.current) return;
-                if (data && data.success && data.record) {
-                  const rawRow = data.record;
-                  const mappedRecord: any = { ...rawRow };
-                  const mappings: Record<string, string> = activeProfile.fieldMappings || {};
+          let batchHandled = false;
 
-                  Object.entries(mappings).forEach(([logicalKey, physCol]) => {
-                    if (physCol) {
-                      if (rawRow[physCol] !== undefined) {
-                        mappedRecord[logicalKey] = String(rawRow[physCol]);
-                      } else {
-                        for (const [k, v] of Object.entries(rawRow)) {
-                          if (k.toLowerCase() === physCol.toLowerCase()) {
-                            mappedRecord[logicalKey] = String(v ?? "");
-                            break;
+          // 1. High-Performance Multithreaded Batch Lookup (<50ms for dozens/hundreds of numbers)
+          if (electronAPI.dbQueryRecordsBatch) {
+            try {
+              const batchRes = await electronAPI.dbQueryRecordsBatch(
+                activeProfile,
+                targetTable,
+                lookupField,
+                uncachedTerms
+              );
+
+              if (version !== lookupVersionRef.current) return;
+
+              if (batchRes && batchRes.success && batchRes.records) {
+                const returnedRecords = batchRes.records;
+                const mappings: Record<string, string> = activeProfile.fieldMappings || {};
+
+                uncachedTerms.forEach((baseTerm) => {
+                  const cleanTerm = baseTerm.toLowerCase();
+                  const rawRow = returnedRecords[cleanTerm] || returnedRecords[baseTerm];
+
+                  if (rawRow) {
+                    const mappedRecord: any = { ...rawRow };
+
+                    Object.entries(mappings).forEach(([logicalKey, physCol]) => {
+                      if (physCol) {
+                        if (rawRow[physCol] !== undefined) {
+                          mappedRecord[logicalKey] = String(rawRow[physCol]);
+                        } else {
+                          for (const [k, v] of Object.entries(rawRow)) {
+                            if (k.toLowerCase() === physCol.toLowerCase()) {
+                              mappedRecord[logicalKey] = String(v ?? "");
+                              break;
+                            }
                           }
                         }
                       }
-                    }
-                  });
+                    });
 
-                  const primaryAcc = mappedRecord.AccessionNo || mappedRecord.acc_no || rawRow[lookupField] || baseTerm;
-                  mappedRecord.AccessionNo = primaryAcc;
-                  mappedRecord.acc_no = primaryAcc;
+                    const primaryAcc = mappedRecord.AccessionNo || mappedRecord.acc_no || rawRow[lookupField] || baseTerm;
+                    mappedRecord.AccessionNo = primaryAcc;
+                    mappedRecord.acc_no = primaryAcc;
 
-                  lookupCache.current.set(cleanTerm, { success: true, record: mappedRecord, rawRow: rawRow });
-                  newResults.set(cleanTerm, { status: "found", record: mappedRecord });
-                } else {
-                  lookupCache.current.set(cleanTerm, { success: false, record: null });
-                  newResults.set(cleanTerm, { status: "not_found", record: null });
-                }
-              } catch (e) {
-                lookupCache.current.set(cleanTerm, { success: false, record: null });
-                newResults.set(cleanTerm, { status: "not_found", record: null });
+                    lookupCache.current.set(cleanTerm, { success: true, record: mappedRecord, rawRow: rawRow });
+                    newResults.set(cleanTerm, { status: "found", record: mappedRecord });
+                  } else {
+                    lookupCache.current.set(cleanTerm, { success: false, record: null });
+                    newResults.set(cleanTerm, { status: "not_found", record: null });
+                  }
+                });
+
+                batchHandled = true;
               }
-            })
-          );
+            } catch (batchErr) {
+              console.warn("Batch lookup failed, falling back to parallel worker pool:", batchErr);
+            }
+          }
+
+          // 2. Fallback: Multithreaded / Parallel Concurrency Pool (16 concurrent workers)
+          if (!batchHandled) {
+            const CONCURRENCY_LIMIT = 16;
+            const chunks: string[][] = [];
+            for (let i = 0; i < uncachedTerms.length; i += CONCURRENCY_LIMIT) {
+              chunks.push(uncachedTerms.slice(i, i + CONCURRENCY_LIMIT));
+            }
+
+            for (const chunk of chunks) {
+              if (version !== lookupVersionRef.current) return;
+              await Promise.all(
+                chunk.map(async (baseTerm) => {
+                  const cleanTerm = baseTerm.toLowerCase();
+                  try {
+                    const data = await electronAPI.dbQueryRecord(activeProfile, targetTable, lookupField, baseTerm);
+                    if (version !== lookupVersionRef.current) return;
+                    if (data && data.success && data.record) {
+                      const rawRow = data.record;
+                      const mappedRecord: any = { ...rawRow };
+                      const mappings: Record<string, string> = activeProfile.fieldMappings || {};
+
+                      Object.entries(mappings).forEach(([logicalKey, physCol]) => {
+                        if (physCol) {
+                          if (rawRow[physCol] !== undefined) {
+                            mappedRecord[logicalKey] = String(rawRow[physCol]);
+                          } else {
+                            for (const [k, v] of Object.entries(rawRow)) {
+                              if (k.toLowerCase() === physCol.toLowerCase()) {
+                                mappedRecord[logicalKey] = String(v ?? "");
+                                break;
+                              }
+                            }
+                          }
+                        }
+                      });
+
+                      const primaryAcc = mappedRecord.AccessionNo || mappedRecord.acc_no || rawRow[lookupField] || baseTerm;
+                      mappedRecord.AccessionNo = primaryAcc;
+                      mappedRecord.acc_no = primaryAcc;
+
+                      lookupCache.current.set(cleanTerm, { success: true, record: mappedRecord, rawRow: rawRow });
+                      newResults.set(cleanTerm, { status: "found", record: mappedRecord });
+                    } else {
+                      lookupCache.current.set(cleanTerm, { success: false, record: null });
+                      newResults.set(cleanTerm, { status: "not_found", record: null });
+                    }
+                  } catch (e) {
+                    lookupCache.current.set(cleanTerm, { success: false, record: null });
+                    newResults.set(cleanTerm, { status: "not_found", record: null });
+                  }
+                })
+              );
+            }
+          }
         } finally {
           if (lookupVersionRef.current === version) {
             setIsLookingUp(false);
@@ -860,12 +931,21 @@ export const PrintModal: React.FC<PrintModalProps> = ({
       clearTimeout(debounceTimerRef.current);
     }
 
+    if (!text.trim()) {
+      setIsLookingUp(false);
+      setLookupResults(new Map());
+      return;
+    }
+
     if (!activeProfile) {
       processLookups(text, newVersion);
     } else {
+      setIsLookingUp(true);
+      const hasMultiple = text.includes("\n") || text.includes(",") || text.includes(" ");
+      const delay = hasMultiple ? 50 : 150;
       debounceTimerRef.current = setTimeout(() => {
         processLookups(text, newVersion);
-      }, 250);
+      }, delay);
     }
   };
 
@@ -902,11 +982,8 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     return splitAccessionText(accessionText);
   }, [accessionText]);
 
-  // Preview & Print Data: Generate a record for EVERY parsed accession number.
-  // If matched in DB, enrich with DB fields (Title, Author, etc.).
-  // If DB hasn't loaded yet or not found, generate an immediate fallback record with AccessionNo = finalAcc
-  // Preview & Print Data: Only include valid found records or standalone records.
-  // Missing records (status === "not_found") are excluded so they cannot be printed.
+  // Preview & Print Data: Only include confirmed found records or standalone records.
+  // When connected to database, unconfirmed/missing records are strictly excluded so preview only generates on found records.
   const selectedRecords = React.useMemo(() => {
     const records: DatabaseRecord[] = [];
     parsedAccessions.forEach((rawTerm) => {
@@ -932,8 +1009,8 @@ export const PrintModal: React.FC<PrintModalProps> = ({
               [logicalUniqueKey]: finalAcc,
               [lookupField]: finalAcc,
             });
-          } else {
-            // Immediate fallback record using entered accession number (for standalone mode or in-flight query)
+          } else if (!activeProfile) {
+            // Immediate fallback record using entered accession number ONLY for standalone mode (no DB)
             records.push({
               AccessionNo: finalAcc,
               acc_no: finalAcc,
@@ -2475,6 +2552,26 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                     ref={textareaRef}
                     value={accessionText}
                     onChange={(e) => handleAccessionTextChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        if (debounceTimerRef.current) {
+                          clearTimeout(debounceTimerRef.current);
+                        }
+                        const newVersion = lookupVersionRef.current + 1;
+                        lookupVersionRef.current = newVersion;
+                        processLookups(latestTextRef.current, newVersion);
+                      }
+                    }}
+                    onPaste={() => {
+                      if (debounceTimerRef.current) {
+                        clearTimeout(debounceTimerRef.current);
+                      }
+                      setTimeout(() => {
+                        const newVersion = lookupVersionRef.current + 1;
+                        lookupVersionRef.current = newVersion;
+                        processLookups(latestTextRef.current, newVersion);
+                      }, 10);
+                    }}
                     onScroll={handleTextareaScroll}
                     placeholder={"Enter or paste accession numbers..."}
                     spellCheck={false}
@@ -2548,6 +2645,13 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                       <span className="font-bold text-xs flex items-center gap-1.5">
                         <AlertCircle className="w-3.5 h-3.5 shrink-0 text-red-500" />
                         <span>{missingAccessionNumbers.length} record(s) not found in database</span>
+                      </span>
+                    </div>
+                  ) : isLookingUp ? (
+                    <div className="flex items-center justify-between text-[10px] px-1">
+                      <span className={`font-bold flex items-center gap-1.5 ${isLight ? 'text-indigo-600' : 'text-indigo-400'}`}>
+                        <RotateCw className="w-3 h-3 animate-spin shrink-0" />
+                        <span>Checking accession numbers in database...</span>
                       </span>
                     </div>
                   ) : selectedRecords.length > 0 ? (
@@ -2658,7 +2762,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                   </div>
                 </div>
 
-                <div className="relative" ref={printerDropdownRef}>
+                <div className="relative z-30" ref={printerDropdownRef}>
                   <button
                     type="button"
                     onClick={() => setIsPrinterDropdownOpen((prev) => !prev)}
@@ -2674,12 +2778,12 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                     <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${isPrinterDropdownOpen ? 'rotate-180 text-indigo-500' : isLight ? 'text-slate-400' : 'text-slate-500'}`} />
                   </button>
 
-                  {/* Floating Custom Dropdown Menu */}
+                  {/* Floating Custom Dropdown Menu: Opens upward on top so it never gets cropped by the footer */}
                   {isPrinterDropdownOpen && (
-                    <div className={`absolute left-0 right-0 top-full mt-1 z-50 rounded-xl p-1 shadow-2xl border ${
+                    <div className={`absolute left-0 right-0 bottom-full mb-1.5 z-50 rounded-xl p-1 shadow-2xl border ${
                       isLight
-                        ? 'bg-white border-slate-200/90 shadow-slate-300/60'
-                        : 'bg-[#151928] border-slate-700 shadow-black/80'
+                        ? 'bg-white border-slate-200 shadow-2xl shadow-slate-400/50'
+                        : 'bg-[#151928] border-slate-700 shadow-2xl shadow-black/90'
                     } max-h-48 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-100`}>
                       {printers.length === 0 ? (
                         <div className="p-2.5 text-center text-xs text-slate-400 font-medium">
@@ -3001,15 +3105,25 @@ export const PrintModal: React.FC<PrintModalProps> = ({
               ) : (
                 <div className={`m-auto flex flex-col items-center gap-4 text-center max-w-sm z-10 p-6 ${isLight ? 'bg-white border-slate-200 shadow-xl' : 'bg-[#0e111a] border-slate-800 shadow-2xl'} border rounded-2xl`}>
                   <div className={`w-14 h-14 rounded-2xl ${isLight ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'} flex items-center justify-center mb-1`}>
-                    <Search className="w-6 h-6" />
+                    {isLookingUp ? (
+                      <RotateCw className="w-6 h-6 animate-spin text-indigo-500" />
+                    ) : (
+                      <Search className="w-6 h-6" />
+                    )}
                   </div>
                   <div>
-                    <h4 className={`text-sm font-bold ${isLight ? 'text-slate-900' : 'text-slate-100'} tracking-tight`}>No preview available</h4>
+                    <h4 className={`text-sm font-bold ${isLight ? 'text-slate-900' : 'text-slate-100'} tracking-tight`}>
+                      {isLookingUp ? "Checking Database..." : "No preview available"}
+                    </h4>
                     <p className={`text-xs leading-relaxed mt-1.5 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
-                      {selectedTemplateIds.length === 0
+                      {isLookingUp
+                        ? "Verifying accession number in database records..."
+                        : selectedTemplateIds.length === 0
                         ? "Select one or more layout templates from the sidebar options to construct label configurations."
+                        : hasEnteredAccessions && missingAccessionNumbers.length > 0
+                        ? `${missingAccessionNumbers.length} accession record(s) not found in database. Print preview will generate once all numbers are found.`
                         : hasEnteredAccessions && selectedRecords.length === 0
-                        ? "No valid accession records were found. Nothing can be printed."
+                        ? "No valid accession records were found in database."
                         : "Enter valid database codes or accession identifiers in the input card to generate print simulations."}
                     </p>
                   </div>

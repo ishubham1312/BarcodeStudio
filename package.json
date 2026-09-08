@@ -1,7 +1,7 @@
 {
   "name": "barcode-studio-v3",
   "private": true,
-  "version": "3.7.8",
+  "version": "3.7.9",
   "type": "module",
   "description": "Barcode Studio is a desktop application for designing, printing and managing barcodes.",
   "author": "Shubham",

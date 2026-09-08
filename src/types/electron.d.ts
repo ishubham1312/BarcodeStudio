@@ -13,6 +13,8 @@ export interface ElectronAPI {
   dbQuery: (config: any, table: string, limit: number) => Promise<{ success: boolean; rows: any[]; message?: string }>;
   dbQueryRecord: (config: any, table: string, uniqueField: string, value: string) => 
     Promise<{ success: boolean; record: any | null; message?: string }>;
+  dbQueryRecordsBatch?: (config: any, table: string, uniqueField: string, values: string[]) =>
+    Promise<{ success: boolean; records?: Record<string, any>; message?: string }>;
 
   // Printer operations
   getPrinters: () => Promise<{ success: boolean; printers: any[]; message?: string }>;

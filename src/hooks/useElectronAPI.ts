@@ -66,6 +66,14 @@ export function useElectronAPI(): ElectronAPI {
         });
         return await res.json();
       },
+      dbQueryRecordsBatch: async (config, table, uniqueField, values) => {
+        const res = await fetch('/api/db/query-records-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config, table, uniqueField, values })
+        });
+        return await res.json();
+      },
 
       getPrinters: async () => {
         // Fallback mock printers

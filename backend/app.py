@@ -52,7 +52,8 @@ from services.db_service import (
   get_tables,
   get_columns,
   get_preview_rows,
-  get_record_by_unique_field
+  get_record_by_unique_field,
+  get_records_by_unique_field_batch
 )
 from services.printer_service import (
   get_installed_printers,
@@ -212,6 +213,20 @@ def db_query_record():
     return jsonify({"success": True, "record": record})
   except Exception as e:
     return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/db/query-records-batch', methods=['POST'])
+def db_query_records_batch():
+  data = request.json or {}
+  config = data.get("config", {})
+  table = data.get("table", "")
+  unique_field = data.get("uniqueField", "")
+  values = data.get("values", [])
+  try:
+    records = get_records_by_unique_field_batch(config, table, unique_field, values)
+    return jsonify({"success": True, "records": records})
+  except Exception as e:
+    return jsonify({"success": False, "message": str(e)}), 500
+
 
 # --- PRINTER ENDPOINTS ---
 

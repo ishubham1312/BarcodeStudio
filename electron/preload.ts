@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dbQuery: (config: any, table: string, limit: number) => ipcRenderer.invoke('db-query', config, table, limit),
   dbQueryRecord: (config: any, table: string, uniqueField: string, value: string) => 
     ipcRenderer.invoke('db-query-record', config, table, uniqueField, value),
+  dbQueryRecordsBatch: (config: any, table: string, uniqueField: string, values: string[]) =>
+    ipcRenderer.invoke('db-query-records-batch', config, table, uniqueField, values),
 
   // Printer operations
   getPrinters: () => ipcRenderer.invoke('get-printers'),
