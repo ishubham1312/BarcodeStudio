@@ -928,6 +928,8 @@ export default function App() {
         ? prev.filter((id) => id !== activeTmpl.id)
         : [...prev, activeTmpl.id];
       localStorage.setItem("barcode_studio_pinned_templates", JSON.stringify(next));
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new CustomEvent("bcs-data-updated"));
       logMessage(
         "info",
         isPinned
@@ -953,6 +955,8 @@ export default function App() {
         return g;
       });
       localStorage.setItem("barcode_studio_shortcuts", JSON.stringify(next));
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new CustomEvent("bcs-data-updated"));
       return next;
     });
   };
@@ -969,6 +973,8 @@ export default function App() {
     const next = [...existingGroups, newGroup];
     setExistingGroups(next);
     localStorage.setItem("barcode_studio_shortcuts", JSON.stringify(next));
+    window.dispatchEvent(new Event("storage"));
+    window.dispatchEvent(new CustomEvent("bcs-data-updated"));
     setNewGroupName("");
     logMessage("success", `Created group '${name}' and assigned layout '${activeTmpl.name}'.`);
   };
@@ -1426,16 +1432,60 @@ export default function App() {
     }
   }, [electronAPI, checkCustomFonts, addRecentFile, logMessage]);
 
-  const updateSavedTemplatesList = useCallback((templateToSave: LabelTemplate) => {
+  const updateSavedTemplatesList = useCallback((templateToSave: LabelTemplate, oldId?: string) => {
     try {
       const savedStr = localStorage.getItem("windows_barcode_studio_saved_templates");
       let userSaved: LabelTemplate[] = [];
       if (savedStr) {
         try { userSaved = JSON.parse(savedStr); } catch (err) { }
       }
-      userSaved = userSaved.filter(t => t.id !== templateToSave.id);
+      userSaved = userSaved.filter(t => t.id !== templateToSave.id && (!oldId || t.id !== oldId));
       userSaved.unshift(deepClone(templateToSave));
       localStorage.setItem("windows_barcode_studio_saved_templates", JSON.stringify(userSaved));
+
+      // Synchronize shortcuts if oldId changed
+      if (oldId && oldId !== templateToSave.id) {
+        try {
+          const scStr = localStorage.getItem("barcode_studio_shortcuts");
+          if (scStr) {
+            const scList = JSON.parse(scStr);
+            let scChanged = false;
+            const updatedSc = scList.map((sc: any) => {
+              if (sc.templateIds && sc.templateIds.includes(oldId)) {
+                scChanged = true;
+                return {
+                  ...sc,
+                  templateIds: sc.templateIds.map((id: string) => (id === oldId ? templateToSave.id : id)),
+                };
+              }
+              return sc;
+            });
+            if (scChanged) {
+              localStorage.setItem("barcode_studio_shortcuts", JSON.stringify(updatedSc));
+              setExistingGroups(updatedSc);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to update shortcuts on save:", e);
+        }
+
+        try {
+          const pinnedStr = localStorage.getItem("barcode_studio_pinned_templates");
+          if (pinnedStr) {
+            const pinned: string[] = JSON.parse(pinnedStr);
+            if (pinned.includes(oldId)) {
+              const updatedPinned = pinned.map((id) => (id === oldId ? templateToSave.id : id));
+              localStorage.setItem("barcode_studio_pinned_templates", JSON.stringify(updatedPinned));
+              setPinnedTemplateIds(updatedPinned);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to update pinned on save:", e);
+        }
+      }
+
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new CustomEvent("bcs-data-updated", { detail: { templateId: templateToSave.id, oldId } }));
     } catch (err) {
       console.error("Failed to update saved templates list:", err);
     }
@@ -1483,7 +1533,7 @@ export default function App() {
           });
 
           addRecentFile(finalPath, templateToSave.name);
-          updateSavedTemplatesList(templateToSave);
+          updateSavedTemplatesList(templateToSave, oldId);
 
           const filename = finalPath.split(/[\\/]/).pop() || finalPath;
           logMessage("success", `Saved layout design as: ${filename}`);
@@ -1557,9 +1607,21 @@ export default function App() {
         logMessage("error", `Save error: ${err.message}`);
       }
     } else {
-      await handleSaveAsTemplateDialog();
+      // Save internal layout template directly into persistent storage (keeping same ID)
+      try {
+        const { templateToSave } = serializeTemplateToFile(template, { isSaveAs: false });
+        templateToSave.id = template.id; // explicitly preserve document ID
+        setOpenTemplates((prev) => prev.map((t) => (t.id === templateToSave.id ? templateToSave : t)));
+        updateSavedTemplatesList(templateToSave);
+
+        logMessage("success", `Saved layout progress: ${templateToSave.name}`);
+        setSaveStatus(`Saved: ${templateToSave.name}`);
+        setTimeout(() => setSaveStatus(null), 2500);
+      } catch (err: any) {
+        logMessage("error", `Save error: ${err.message}`);
+      }
     }
-  }, [template, templateFilePaths, handleSaveAsTemplateDialog, addRecentFile, logMessage, updateSavedTemplatesList]);
+  }, [template, templateFilePaths, addRecentFile, logMessage, updateSavedTemplatesList]);
 
   const handleCloseTab = (id: string) => {
     const nextTabs = openTemplates.filter((t) => t.id !== id);
@@ -1568,6 +1630,7 @@ export default function App() {
       setOpenTemplates([]);
       setActiveTemplateId("");
       setActiveView('home');
+      window.dispatchEvent(new CustomEvent("bcs-data-updated"));
     } else {
       setOpenTemplates(nextTabs);
       if (activeTemplateId === id) {
@@ -2647,6 +2710,7 @@ export default function App() {
                       setOpenTemplates([]);
                       setActiveTemplateId("");
                       setActiveView('home');
+                      window.dispatchEvent(new CustomEvent("bcs-data-updated"));
                       logMessage("warning", "Closed all layout templates.");
                     }}
                     className="flex items-center gap-1 px-2 py-0.5 rounded border border-metro-border bg-metro-panel/50 hover:bg-rose-500/10 hover:border-rose-500/30 text-metro-primary hover:text-rose-500 transition-all cursor-pointer text-[9px] font-extrabold uppercase tracking-wider font-mono shrink-0"

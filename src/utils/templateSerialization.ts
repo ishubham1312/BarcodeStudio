@@ -158,7 +158,7 @@ export function serializeTemplateToFile(
   templateToSave.lastModified = new Date().toISOString();
 
   const payload = {
-    __bcs_version: "3.7.9",
+    __bcs_version: "3.8.1",
     __bcs_type: "template",
     ...templateToSave,
   };

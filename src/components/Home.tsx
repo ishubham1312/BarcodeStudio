@@ -75,14 +75,28 @@ export const Home: React.FC<HomeProps> = ({
   const electronAPI = useElectronAPI();
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<"dashboard" | "history">("dashboard");
-  const [shortcuts, setShortcuts] = useState<QuickShortcut[]>([]);
+  const [shortcuts, setShortcuts] = useState<QuickShortcut[]>(() => {
+    try {
+      const saved = localStorage.getItem("barcode_studio_shortcuts");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [showAddShortcutModal, setShowAddShortcutModal] = useState(false);
   const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [selectedShortcutIds, setSelectedShortcutIds] = useState<string[]>([]);
   const [showConfirmDeleteModal, setShowConfirmDeleteModal] = useState(false);
   const [newShortcutName, setNewShortcutName] = useState("");
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
-  const [savedUserTemplates, setSavedUserTemplates] = useState<LabelTemplate[]>([]);
+  const [savedUserTemplates, setSavedUserTemplates] = useState<LabelTemplate[]>(() => {
+    try {
+      const savedStr = localStorage.getItem("windows_barcode_studio_saved_templates");
+      return savedStr ? JSON.parse(savedStr) : [];
+    } catch {
+      return [];
+    }
+  });
   const [templateToDelete, setTemplateToDelete] = useState<LabelTemplate | null>(null);
 
   const translateOldId = (id: string): string => {
@@ -104,16 +118,37 @@ export const Home: React.FC<HomeProps> = ({
     }
   };
 
+  const loadShortcuts = () => {
+    try {
+      const saved = localStorage.getItem("barcode_studio_shortcuts");
+      setShortcuts(saved ? JSON.parse(saved) : []);
+    } catch (e) {
+      setShortcuts([]);
+    }
+  };
+
   useEffect(() => {
     loadSavedTemplates();
   }, [showAddShortcutModal]);
 
   useEffect(() => {
-    const handleStorage = () => {
+    const handleUpdate = () => {
       loadSavedTemplates();
+      loadShortcuts();
+      try {
+        const stored = localStorage.getItem("barcode_studio_pinned_templates");
+        setPinnedIds(stored ? JSON.parse(stored) : []);
+      } catch { }
     };
-    window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
+
+    handleUpdate();
+
+    window.addEventListener("storage", handleUpdate);
+    window.addEventListener("bcs-data-updated", handleUpdate);
+    return () => {
+      window.removeEventListener("storage", handleUpdate);
+      window.removeEventListener("bcs-data-updated", handleUpdate);
+    };
   }, []);
 
   const handleConfirmDeleteTemplate = () => {
@@ -144,6 +179,18 @@ export const Home: React.FC<HomeProps> = ({
       return next;
     });
 
+    // Remove from existing shortcuts
+    setShortcuts((prev) => {
+      const next = prev.map((s) => ({
+        ...s,
+        templateIds: s.templateIds.filter((tId) => tId !== id),
+      })).filter((s) => s.templateIds.length > 0);
+      localStorage.setItem("barcode_studio_shortcuts", JSON.stringify(next));
+      return next;
+    });
+
+    window.dispatchEvent(new Event("storage"));
+    window.dispatchEvent(new CustomEvent("bcs-data-updated"));
     setTemplateToDelete(null);
   };
 
@@ -217,6 +264,8 @@ export const Home: React.FC<HomeProps> = ({
       "barcode_studio_shortcuts",
       JSON.stringify(nextShortcuts),
     );
+    window.dispatchEvent(new Event("storage"));
+    window.dispatchEvent(new CustomEvent("bcs-data-updated"));
 
     // Reset fields
     setNewShortcutName("");
@@ -233,6 +282,8 @@ export const Home: React.FC<HomeProps> = ({
       "barcode_studio_shortcuts",
       JSON.stringify(nextShortcuts),
     );
+    window.dispatchEvent(new Event("storage"));
+    window.dispatchEvent(new CustomEvent("bcs-data-updated"));
 
     // Reset delete modes
     setSelectedShortcutIds([]);
@@ -251,8 +302,24 @@ export const Home: React.FC<HomeProps> = ({
   };
 
   const handleOpenShortcut = (shortcut: QuickShortcut) => {
+    let freshSaved: LabelTemplate[] = [];
+    try {
+      const savedStr = localStorage.getItem("windows_barcode_studio_saved_templates");
+      if (savedStr) freshSaved = JSON.parse(savedStr);
+    } catch { }
+    const freshCombined = [...freshSaved, ...defaultTemplates].filter(
+      (item, index, self) => self.findIndex((t) => t.id === item.id) === index,
+    );
+
     const matchedTemplates = shortcut.templateIds
-      .map((id) => combinedTemplates.find((t) => t.id === translateOldId(id)))
+      .map((id) => {
+        const translatedId = translateOldId(id);
+        return (
+          freshCombined.find((t) => t.id === translatedId) ||
+          freshCombined.find((t) => t.id === id) ||
+          freshCombined.find((t) => t.name === id)
+        );
+      })
       .filter((t): t is LabelTemplate => !!t);
 
     if (matchedTemplates.length === 0) return;
@@ -309,6 +376,8 @@ export const Home: React.FC<HomeProps> = ({
           const importedIds = new Set(importedTemplates.map((t) => t.id));
           userSaved = [...importedTemplates.map((t) => deepClone(t)), ...userSaved.filter((t) => !importedIds.has(t.id))];
           localStorage.setItem("windows_barcode_studio_saved_templates", JSON.stringify(userSaved));
+          window.dispatchEvent(new Event("storage"));
+          window.dispatchEvent(new CustomEvent("bcs-data-updated"));
 
           setSavedUserTemplates(userSaved);
           setSelectedTemplateIds((prev) => {
@@ -829,8 +898,23 @@ export const Home: React.FC<HomeProps> = ({
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  let freshSaved: LabelTemplate[] = [];
+                                  try {
+                                    const savedStr = localStorage.getItem("windows_barcode_studio_saved_templates");
+                                    if (savedStr) freshSaved = JSON.parse(savedStr);
+                                  } catch { }
+                                  const freshCombined = [...freshSaved, ...defaultTemplates].filter(
+                                    (item, index, self) => self.findIndex((t) => t.id === item.id) === index,
+                                  );
                                   const templatesToPrint = shortcut.templateIds
-                                    .map((id) => combinedTemplates.find((t) => t.id === translateOldId(id)))
+                                    .map((id) => {
+                                      const translatedId = translateOldId(id);
+                                      return (
+                                        freshCombined.find((t) => t.id === translatedId) ||
+                                        freshCombined.find((t) => t.id === id) ||
+                                        freshCombined.find((t) => t.name === id)
+                                      );
+                                    })
                                     .filter(Boolean) as LabelTemplate[];
                                   onPrintTemplates(templatesToPrint);
                                 }}
