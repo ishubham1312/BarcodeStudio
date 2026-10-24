@@ -62,7 +62,6 @@ from services.printer_service import (
 )
 from services.file_service import export_to_pdf, export_to_png
 from services.barcode_service import generate_1d_barcode, generate_qr_code
-from services.telemetry_service import TelemetryReporter
 from services.gmail_service import poll_gmail_inbox_and_print
 import threading
 import time
@@ -81,32 +80,13 @@ try:
 except Exception as e:
     logger.warning(f"[Font Engine] Failed to verify Raqm feature: {e}")
 
-# Initialize Telemetry Reporting Service
-telemetry_service = TelemetryReporter(
-    email_address="thesickeditz@gmail.com",
-    app_password="lpnw fbqy zyyv waxi",
-    user_data_dir=get_user_data_dir()
-)
-
-def start_telemetry_reporter_thread():
-    def telemetry_sync_loop():
-        # Sync telemetry immediately on start
-        try:
-            telemetry_service.validate()
-        except Exception as e:
-            logger.error(f"Error in initial telemetry sync: {e}")
-            
-        while True:
-            time.sleep(3600) # Re-sync every 1 hour
-            try:
-                telemetry_service.validate()
-            except Exception as e:
-                logger.error(f"Error in periodic telemetry sync: {e}")
-                
-    t = threading.Thread(target=telemetry_sync_loop, daemon=True)
-    t.start()
-
-start_telemetry_reporter_thread()
+# Clean up any legacy telemetry cache file if present (now managed via Admin Panel)
+try:
+    legacy_telemetry_file = get_user_data_dir() / "telemetry.dat"
+    if legacy_telemetry_file.exists():
+        legacy_telemetry_file.unlink()
+except Exception:
+    pass
 
 # Bootstrap local SQLite DB inside user data folder on startup
 try:
@@ -531,30 +511,15 @@ def settings_save():
 
 @app.route('/api/telemetry/status', methods=['GET'])
 def telemetry_status():
-  try:
-    expired = telemetry_service.is_expired()
-    return jsonify({"success": True, "locked": expired})
-  except Exception as e:
-    return jsonify({"success": False, "message": str(e)}), 500
+  return jsonify({"success": True, "locked": False})
 
 @app.route('/api/telemetry/update', methods=['POST'])
 def telemetry_update():
-  try:
-    data = request.json or {}
-    lock = data.get("lock", True)
-    telemetry_service.update_cache(lock)
-    return jsonify({"success": True, "locked": telemetry_service.is_expired()})
-  except Exception as e:
-    return jsonify({"success": False, "message": str(e)}), 500
+  return jsonify({"success": True, "locked": False})
 
 @app.route('/api/telemetry/sync', methods=['POST'])
 def telemetry_sync():
-  try:
-    telemetry_service.validate()
-    expired = telemetry_service.is_expired()
-    return jsonify({"success": True, "locked": expired})
-  except Exception as e:
-    return jsonify({"success": False, "message": str(e)}), 500
+  return jsonify({"success": True, "locked": False})
 
 # --- BARCODE GENERATION ENDPOINTS (DIRECT RENDERING FOR RENDERER CANVAS PREVIEW) ---
 

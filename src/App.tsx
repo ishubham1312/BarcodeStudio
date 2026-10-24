@@ -13,6 +13,7 @@ import {
 import { mockPrinters, mockRecords, defaultTemplates } from "./data/mockData";
 import { Home } from "./components/Home";
 import { LockScreen } from "./components/LockScreen";
+import { initDirectAccessManager, LockScreenState } from "./services/directAccessService";
 import { DesignerCanvas } from "./components/DesignerCanvas";
 import { SidebarToolbox } from "./components/SidebarToolbox";
 import { PropertiesPanel } from "./components/PropertiesPanel";
@@ -446,28 +447,35 @@ export default function App() {
   const [activeTemplateId, setActiveTemplateId] = useState<string>("");
   const [showAddTabMenu, setShowAddTabMenu] = useState<boolean>(false);
   const [addTabMenuCoords, setAddTabMenuCoords] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
-  const [isLocked, setIsLocked] = useState<boolean>(false);
+  const [directAccessState, setDirectAccessState] = useState<LockScreenState | null>(null);
 
   // App restart modal state on config file load / drop
   const [restartModalInfo, setRestartModalInfo] = useState<{ isOpen: boolean; fileName?: string }>({ isOpen: false });
 
-  // Check application telemetry status on mount and poll periodically
+  // Initialize Enterprise Direct Access Manager (Firebase Firestore Real-time)
   useEffect(() => {
-    const checkStatus = async () => {
+    let cleanup: (() => void) | undefined;
+    let isMounted = true;
+
+    const setup = async () => {
       try {
-        const res = await electronAPI.getTelemetryStatus();
-        if (res && res.success) {
-          setIsLocked(res.locked);
-        }
+        const sysInfo = await electronAPI.getSystemInfo();
+        if (!isMounted) return;
+        cleanup = initDirectAccessManager(sysInfo, (state) => {
+          if (!isMounted) return;
+          setDirectAccessState(state);
+        });
       } catch (err) {
-        console.error("[Telemetry] Error fetching telemetry status:", err);
+        console.error("[DirectAccess] Failed to initialize direct access listener:", err);
       }
     };
 
-    checkStatus();
-    // Poll telemetry status every 1 hour to detect remote reactivation automatically
-    const interval = setInterval(checkStatus, 60 * 60 * 1000);
-    return () => clearInterval(interval);
+    setup();
+
+    return () => {
+      isMounted = false;
+      if (cleanup) cleanup();
+    };
   }, [electronAPI]);
 
 
@@ -1060,7 +1068,25 @@ export default function App() {
                 (r.AccessionNo !== undefined && r.AccessionNo === prev.AccessionNo) ||
                 (r.ACC_NO !== undefined && r.ACC_NO === prev.ACC_NO)
             );
-            return match || prev;
+            if (match) return match;
+            // If activeRecord was not in preview rows (e.g. record 500+), refresh it specifically
+            const prevVal = prev[idKey] || prev.AccessionNo || prev.acc_no;
+            if (prevVal && electronAPI.dbQueryRecord) {
+              electronAPI.dbQueryRecord(server, server.table, idKey, String(prevVal)).then((recRes) => {
+                if (recRes && recRes.success && recRes.record) {
+                  const rawRow = recRes.record;
+                  const mapped: any = { ...rawRow };
+                  Object.entries(fieldMappings).forEach(([logicalKey, physCol]) => {
+                    const colKey = physCol as string;
+                    if (colKey && rawRow[colKey] !== undefined) {
+                      mapped[logicalKey] = String(rawRow[colKey]);
+                    }
+                  });
+                  setActiveRecord(mapped);
+                }
+              }).catch(() => {});
+            }
+            return prev;
           }
           return mappedRows[0] || null;
         });
@@ -1079,6 +1105,26 @@ export default function App() {
       fetchRecords(activeProfile);
     }
   }, [activeProfile, previewMode, showPrintModal, fetchRecords]);
+
+  // Synchronize database records on window focus
+  useEffect(() => {
+    const handleFocus = () => {
+      if (activeProfile && (previewMode === 'live' || showPrintModal)) {
+        fetchRecords(activeProfile);
+      }
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [activeProfile, previewMode, showPrintModal, fetchRecords]);
+
+  // Gentle periodic refresh for live preview mode (every 10s)
+  useEffect(() => {
+    if (!activeProfile || previewMode !== 'live') return;
+    const interval = setInterval(() => {
+      fetchRecords(activeProfile);
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [activeProfile, previewMode, fetchRecords]);
 
   const handleAutoTriggerPrint = useCallback(
     (numbers: string[]) => {
@@ -2209,8 +2255,8 @@ export default function App() {
     );
   };
 
-  if (isLocked) {
-    return <LockScreen onCloseApp={() => electronAPI.close()} />;
+  if (directAccessState?.isLocked) {
+    return <LockScreen onCloseApp={() => electronAPI.close()} info={directAccessState} />;
   }
 
   return (
