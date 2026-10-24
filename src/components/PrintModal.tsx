@@ -661,8 +661,6 @@ export const PrintModal: React.FC<PrintModalProps> = ({
   const [showMissingWarning, setShowMissingWarning] = useState(false);
   const [nativeMode, setNativeMode] = useState(true);
 
-  // Per-session lookup cache
-  const lookupCache = useRef<Map<string, { success: boolean; record: DatabaseRecord | null; rawRow?: any }>>(new Map());
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lookupVersionRef = useRef(0);
 
@@ -742,15 +740,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
       distinctBaseTerms.forEach((baseTerm) => {
         const cleanTerm = baseTerm.toLowerCase();
 
-        // 1. In-memory check (0ms)
-        const memoryMatch = inMemoryRecordsIndex.get(cleanTerm);
-        if (memoryMatch) {
-          lookupCache.current.set(cleanTerm, { success: true, record: memoryMatch });
-          newResults.set(cleanTerm, { status: "found", record: memoryMatch });
-          return;
-        }
-
-        // 2. Standalone mode (0ms)
+        // 1. Standalone mode (0ms)
         if (!activeProfile) {
           const synthRecord: DatabaseRecord = {
             AccessionNo: baseTerm,
@@ -766,22 +756,12 @@ export const PrintModal: React.FC<PrintModalProps> = ({
             Price: "",
             Status: "",
           };
-          lookupCache.current.set(cleanTerm, { success: true, record: synthRecord });
           newResults.set(cleanTerm, { status: "found", record: synthRecord });
           return;
         }
 
-        // 3. Check cache
-        if (lookupCache.current.has(cleanTerm)) {
-          const cached = lookupCache.current.get(cleanTerm)!;
-          if (cached.success && cached.record) {
-            newResults.set(cleanTerm, { status: "found", record: cached.record });
-          } else {
-            newResults.set(cleanTerm, { status: "not_found", record: null });
-          }
-        } else {
-          uncachedTerms.push(baseTerm);
-        }
+        // Live Database mode: Always query database in real-time
+        uncachedTerms.push(baseTerm);
       });
 
       if (version !== lookupVersionRef.current) return;
@@ -837,11 +817,14 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                     mappedRecord.AccessionNo = primaryAcc;
                     mappedRecord.acc_no = primaryAcc;
 
-                    lookupCache.current.set(cleanTerm, { success: true, record: mappedRecord, rawRow: rawRow });
                     newResults.set(cleanTerm, { status: "found", record: mappedRecord });
                   } else {
-                    lookupCache.current.set(cleanTerm, { success: false, record: null });
-                    newResults.set(cleanTerm, { status: "not_found", record: null });
+                    const memoryMatch = inMemoryRecordsIndex.get(cleanTerm);
+                    if (memoryMatch) {
+                      newResults.set(cleanTerm, { status: "found", record: memoryMatch });
+                    } else {
+                      newResults.set(cleanTerm, { status: "not_found", record: null });
+                    }
                   }
                 });
 
@@ -892,15 +875,22 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                       mappedRecord.AccessionNo = primaryAcc;
                       mappedRecord.acc_no = primaryAcc;
 
-                      lookupCache.current.set(cleanTerm, { success: true, record: mappedRecord, rawRow: rawRow });
                       newResults.set(cleanTerm, { status: "found", record: mappedRecord });
                     } else {
-                      lookupCache.current.set(cleanTerm, { success: false, record: null });
-                      newResults.set(cleanTerm, { status: "not_found", record: null });
+                      const memoryMatch = inMemoryRecordsIndex.get(cleanTerm);
+                      if (memoryMatch) {
+                        newResults.set(cleanTerm, { status: "found", record: memoryMatch });
+                      } else {
+                        newResults.set(cleanTerm, { status: "not_found", record: null });
+                      }
                     }
                   } catch (e) {
-                    lookupCache.current.set(cleanTerm, { success: false, record: null });
-                    newResults.set(cleanTerm, { status: "not_found", record: null });
+                    const memoryMatch = inMemoryRecordsIndex.get(cleanTerm);
+                    if (memoryMatch) {
+                      newResults.set(cleanTerm, { status: "found", record: memoryMatch });
+                    } else {
+                      newResults.set(cleanTerm, { status: "not_found", record: null });
+                    }
                   }
                 })
               );
@@ -949,23 +939,40 @@ export const PrintModal: React.FC<PrintModalProps> = ({
     }
   };
 
-  // Sync / initialize accession numbers input ONLY when modal first opens or initialAccessionNumbers change
+  // Sync / initialize accession numbers input when modal opens or initialAccessionNumbers change
   useEffect(() => {
-    if (isOpen && !wasOpenRef.current) {
-      wasOpenRef.current = true;
-      const initialText = initialAccessionNumbers && initialAccessionNumbers.length > 0
-        ? initialAccessionNumbers.join("\n")
-        : "";
-      setAccessionText(initialText);
-      latestTextRef.current = initialText;
-      setShowMissingWarning(false);
-      const newVersion = lookupVersionRef.current + 1;
-      lookupVersionRef.current = newVersion;
-      processLookups(initialText, newVersion);
-    } else if (!isOpen) {
+    if (isOpen) {
+      if (!wasOpenRef.current) {
+        wasOpenRef.current = true;
+        const initialText = initialAccessionNumbers && initialAccessionNumbers.length > 0
+          ? initialAccessionNumbers.join("\n")
+          : latestTextRef.current;
+        setAccessionText(initialText);
+        latestTextRef.current = initialText;
+        setShowMissingWarning(false);
+        const newVersion = lookupVersionRef.current + 1;
+        lookupVersionRef.current = newVersion;
+        if (initialText.trim()) {
+          processLookups(initialText, newVersion);
+        }
+      }
+    } else {
       wasOpenRef.current = false;
     }
   }, [isOpen, initialAccessionNumbers, processLookups]);
+
+  // Window focus listener: when user switches back from DB / external app to Barcode Studio, refresh
+  useEffect(() => {
+    const handleFocus = () => {
+      if (isOpen && latestTextRef.current.trim() && activeProfile) {
+        const newVersion = lookupVersionRef.current + 1;
+        lookupVersionRef.current = newVersion;
+        processLookups(latestTextRef.current, newVersion);
+      }
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [isOpen, activeProfile, processLookups]);
 
   // Reactive Re-check: when in-memory database records arrive or update from App.tsx, re-check using LATEST text
   useEffect(() => {
@@ -2489,6 +2496,23 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                     <span className={`inline-flex items-center text-[9px] px-2 py-0.5 rounded-full font-mono font-bold whitespace-nowrap ${isLight ? 'bg-indigo-50 border border-indigo-200 text-indigo-700' : 'bg-indigo-500/15 border border-indigo-500/30 text-indigo-300'}`}>
                       {parsedAccessions.length} {parsedAccessions.length === 1 ? 'Item' : 'Items'}
                     </span>
+
+                    {activeProfile && accessionText.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newVersion = lookupVersionRef.current + 1;
+                          lookupVersionRef.current = newVersion;
+                          processLookups(latestTextRef.current, newVersion);
+                        }}
+                        title="Refresh from database"
+                        className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                          isLight ? 'hover:bg-slate-200/70 text-slate-400 hover:text-slate-700' : 'hover:bg-slate-800 text-slate-500 hover:text-slate-300'
+                        }`}
+                      >
+                        <RotateCw className={`w-3 h-3 ${isLookingUp ? 'animate-spin text-indigo-500' : ''}`} />
+                      </button>
+                    )}
 
                     {accessionText.trim() && (
                       <button

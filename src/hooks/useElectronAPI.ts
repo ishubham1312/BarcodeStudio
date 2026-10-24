@@ -238,6 +238,24 @@ export function useElectronAPI(): ElectronAPI {
         }
         window.location.reload();
       },
+      getSystemInfo: async () => {
+        if (window.electronAPI && typeof window.electronAPI.getSystemInfo === "function") {
+          return await window.electronAPI.getSystemInfo();
+        }
+        let storedId = localStorage.getItem("barcode_studio_web_hardware_id");
+        if (!storedId) {
+          const rand = Math.random().toString(36).substring(2, 10).toUpperCase() + Math.random().toString(36).substring(2, 10).toUpperCase();
+          storedId = `BCS-${rand.slice(0, 4)}-${rand.slice(4, 8)}-${rand.slice(8, 12)}-${rand.slice(12, 16)}`;
+          localStorage.setItem("barcode_studio_web_hardware_id", storedId);
+        }
+        return {
+          hardwareId: storedId,
+          hostname: window.location.hostname || "WebClient",
+          username: "web_user",
+          os: navigator.userAgent || "Web",
+          platform: "desktop"
+        };
+      },
     };
   }, []);
 }

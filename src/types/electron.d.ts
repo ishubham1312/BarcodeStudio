@@ -73,6 +73,13 @@ export interface ElectronAPI {
   downloadAndInstallUpdate: (downloadUrl: string) => Promise<{ success: boolean; message?: string }>;
   openExternal: (url: string) => Promise<{ success: boolean; message?: string }>;
   restartApp: () => Promise<void>;
+  getSystemInfo: () => Promise<{
+    hardwareId: string;
+    hostname: string;
+    username: string;
+    os: string;
+    platform: string;
+  }>;
 }
 
 declare global {

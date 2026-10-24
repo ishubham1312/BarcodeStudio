@@ -4,7 +4,8 @@ import * as fs from 'fs/promises';
 import * as fssync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execFile, exec } from 'child_process';
+import { execFile, exec, execSync } from 'child_process';
+import * as crypto from 'crypto';
 import { getPythonPort, stopPythonBackend } from './python-bridge';
 import { encrypt, decrypt } from './security';
 
@@ -256,6 +257,28 @@ export function registerIpcHandlers(mainWindow: BrowserWindow) {
   ipcMain.handle('sync-telemetry', async () => {
     try { return await httpRequest('POST', getBackendUrl('/api/telemetry/sync')); }
     catch (err: any) { return { success: false, message: err.message }; }
+  });
+
+  ipcMain.handle('get-system-info', async () => {
+    let machineGuid = '';
+    try {
+      const output = execSync('reg query "HKLM\\Software\\Microsoft\\Cryptography" /v MachineGuid').toString();
+      const match = output.match(/REG_SZ\s+([A-Fa-f0-9-]+)/i);
+      if (match) machineGuid = match[1];
+    } catch {}
+
+    const macs = Object.values(os.networkInterfaces()).flat().map(i => i && i.mac).filter(m => m && m !== '00:00:00:00:00:00').sort().join(',');
+    const seed = machineGuid || (macs + '_' + os.hostname() + '_' + os.userInfo().username);
+    const hash = crypto.createHash('sha256').update(seed).digest('hex').toUpperCase();
+    const hardwareId = `BCS-${hash.slice(0, 4)}-${hash.slice(4, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}`;
+
+    return {
+      hardwareId,
+      hostname: os.hostname(),
+      username: os.userInfo().username,
+      os: `${os.type()} ${os.release()} (${os.arch()})`,
+      platform: 'desktop'
+    };
   });
 
   // WYSIWYG thermal label print: receives jsPDF-generated base64 PDF, writes to temp file,

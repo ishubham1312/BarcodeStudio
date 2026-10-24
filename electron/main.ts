@@ -84,6 +84,7 @@ async function createWindow() {
     y: windowState.y,
     frame: false, // Frameless window
     thickFrame: true, // Auto Aero Snap support on Windows
+    icon: path.join(__dirname, '../assets/logo.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -102,8 +103,9 @@ async function createWindow() {
   // Load React UI
   const isDev = !app.isPackaged;
   if (isDev) {
+    const devPort = process.env.PORT || '3005';
     // Wait for the dev server to start
-    await mainWindow.loadURL('http://127.0.0.1:3000');
+    await mainWindow.loadURL(`http://127.0.0.1:${devPort}`);
     // Open DevTools in dev mode
     mainWindow.webContents.openDevTools();
   } else {

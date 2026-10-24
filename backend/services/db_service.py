@@ -454,6 +454,10 @@ def get_cached_mssql_conn(config: Dict[str, Any]):
       cur.execute("SELECT 1")
       cur.fetchone()
       cur.close()
+      try:
+        conn.commit()
+      except Exception:
+        pass
       return conn
     except Exception:
       try:
@@ -486,6 +490,10 @@ def get_cached_mysql_conn(config: Dict[str, Any]):
   if conn is not None and cached_key == conn_key:
     try:
       conn.ping(reconnect=True)
+      try:
+        conn.commit()
+      except Exception:
+        pass
       return conn
     except Exception:
       try:
@@ -518,6 +526,10 @@ def get_cached_sqlite_conn(sqlite_path: str):
       cur = conn.cursor()
       cur.execute("SELECT 1")
       cur.close()
+      try:
+        conn.commit()
+      except Exception:
+        pass
       return conn
     except Exception:
       try:
@@ -526,7 +538,7 @@ def get_cached_sqlite_conn(sqlite_path: str):
         pass
       _thread_local.sqlite_conn = None
 
-  conn = sqlite3.connect(resolved_path)
+  conn = sqlite3.connect(resolved_path, isolation_level=None)
   conn.row_factory = sqlite3.Row
   _thread_local.sqlite_conn = conn
   _thread_local.sqlite_conn_path = resolved_path
@@ -757,6 +769,10 @@ def get_records_by_unique_field_batch(
     if db_type == "sqlite" and safe_field:
       sqlite_path = config.get("sqlitePath")
       conn = get_cached_sqlite_conn(sqlite_path)
+      try:
+        conn.commit()
+      except Exception:
+        pass
       cursor = conn.cursor()
       safe_table = "".join(c for c in table_name if c.isalnum() or c in '_')
 
@@ -774,6 +790,10 @@ def get_records_by_unique_field_batch(
 
     elif db_type == "mysql" and safe_field:
       conn = get_cached_mysql_conn(config)
+      try:
+        conn.commit()
+      except Exception:
+        pass
       cursor = conn.cursor()
       safe_table = f"`{table_name}`"
 
@@ -791,6 +811,10 @@ def get_records_by_unique_field_batch(
 
     elif db_type == "mssql" and safe_field and pyodbc:
       conn = get_cached_mssql_conn(config)
+      try:
+        conn.commit()
+      except Exception:
+        pass
       cursor = conn.cursor()
       clean_table = f"[{table_name}]" if not ('[' in table_name or '.' in table_name) else "".join(c for c in table_name if c.isalnum() or c in '_.[]')
 
